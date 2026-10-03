@@ -2,7 +2,7 @@ services:
   - type: web
     name: data-tools
     runtime: python
-    plan: starter            # raise this if big files run out of memory
+    plan: free               # change to a paid plan if big files run out of memory
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:app --workers 1 --threads 8 --timeout 300
     healthCheckPath: /healthz

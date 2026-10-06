@@ -1,4 +1,5 @@
 """Data Tools - Streamlit UI. Run locally with:  streamlit run app.py"""
+import gc
 import hmac
 import io
 import tempfile
@@ -70,11 +71,12 @@ def process(key, spec, values):
                 path = folder / safe_name(u.name)
                 if path.exists():  # two uploads with the same name
                     path = folder / f"{i}_{path.name}"
-                path.write_bytes(u.getvalue())
+                path.write_bytes(u.getbuffer())  # no extra copy in memory
                 saved.append(path)
             args[f["name"]] = saved[0] if f["kind"] == "file" else saved
         ok, log = run_tool(key, args, out)
         files = {p.relative_to(out).as_posix(): p.read_bytes() for p in sorted(out.rglob("*")) if p.is_file()}
+    gc.collect()
     return {"ok": ok, "log": log, "files": files}
 
 
@@ -97,7 +99,8 @@ def show_results(key):
         st.error("Stopped with an error. Open the log below to see what went wrong.")
 
     files = res["files"]
-    if len(files) > 1:
+    total = sum(len(d) for d in files.values())
+    if len(files) > 1 and total <= 60 * 1024 * 1024:  # a ZIP of big results would double the memory use
         st.download_button("Download everything (ZIP)", make_zip(files), file_name=f"{key}_results.zip",
                            mime="application/zip", key=f"zip_{key}")
     for i, (name, data) in enumerate(files.items()):

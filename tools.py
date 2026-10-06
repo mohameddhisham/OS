@@ -65,73 +65,131 @@ def find_phone_column(df):
     return df.columns[0]
 
 
+CHUNK_ROWS = 100_000
+
+
+def detect_encoding(path):
+    """Pick the first encoding that can decode the whole file (streamed, low memory)."""
+    for enc in ("utf-8-sig", "cp1252", "ISO-8859-1"):
+        try:
+            with open(path, "r", encoding=enc, newline="") as f:
+                while f.read(1 << 20):
+                    pass
+            return enc
+        except UnicodeDecodeError:
+            continue
+    return "ISO-8859-1"
+
+
+def is_excel(path):
+    return os.path.splitext(str(path))[1].lower() in (".xlsx", ".xls", ".xlsm")
+
+
+def table_header(path):
+    """Only the column names of a CSV/Excel file."""
+    if is_excel(path):
+        return pd.read_excel(path, nrows=0, dtype=str)
+    return pd.read_csv(path, nrows=0, dtype=str, encoding=detect_encoding(path))
+
+
+def iter_table(path, chunk_rows=CHUNK_ROWS):
+    """Yield the file in pieces of text-only rows (CSV streams; Excel must be loaded once)."""
+    if is_excel(path):
+        df = pd.read_excel(path, dtype=str)
+        for i in range(0, len(df), chunk_rows):
+            yield df.iloc[i:i + chunk_rows]
+    else:
+        yield from pd.read_csv(path, dtype=str, encoding=detect_encoding(path), chunksize=chunk_rows)
+
+
+def read_phone_set(path):
+    """Cleaned phone numbers of a CSV/Excel file, reading ONLY the phone column."""
+    col = find_phone_column(table_header(path))
+    if is_excel(path):
+        df = pd.read_excel(path, usecols=[col], dtype=str)
+    else:
+        df = pd.read_csv(path, usecols=[col], dtype=str, encoding=detect_encoding(path))
+    return set(clean_phone_last10(df[col]).tolist())
+
+
 def run_remove(a, out):
     name_format = need_placeholder(a["name_format"])
     split_dir = out / "SPLITS"
     split_dir.mkdir(parents=True, exist_ok=True)
 
     print("--- Starting Multi-Stage Filtering ---")
-    print(" -> Loading input file...")
-    fresh = read_file(a["order"])
-    fresh["clean_phone"] = clean_phone_last10(fresh[find_phone_column(fresh)])
-
     exclude = set()
 
     print(" -> Loading CRM...")
-    crm = read_file(a["crm"])
-    exclude.update(clean_phone_last10(crm[find_phone_column(crm)]).tolist())
+    exclude.update(read_phone_set(a["crm"]))
 
     print(" -> Loading Answer Machine TXT...")
     am = pd.read_csv(a["am_txt"], header=None, names=["AM_PHONE"], dtype=str,
                      encoding="ISO-8859-1", low_memory=False)
     exclude.update(clean_phone_last10(am["AM_PHONE"]).tolist())
+    del am
 
     print(" -> Loading Answer Machine Excel...")
-    am_x = read_file(a["am_excel"])
-    am_x.columns = am_x.columns.astype(str).str.strip()
-    exclude.update(clean_phone_last10(am_x[find_phone_column(am_x)]).tolist())
+    exclude.update(read_phone_set(a["am_excel"]))
 
     print(" -> Loading DNC list...")
-    dnc = read_file(a["dnc"])
-    dnc.columns = dnc.columns.astype(str).str.strip()
-    dnc_phones = set(clean_phone_last10(dnc[find_phone_column(dnc)]).tolist())
+    dnc_phones = read_phone_set(a["dnc"])
     exclude.update(dnc_phones)
     print(f" -> DNC numbers loaded: {len(dnc_phones):,}")
     print(f" -> Total excluded numbers: {len(exclude):,}")
 
-    print(" -> Removing CRM, Answer Machine, and DNC matches...")
-    is_match = fresh["clean_phone"].isin(exclude)
-    removed = fresh[is_match].drop(columns=["clean_phone"])
-    kept = fresh[~is_match].drop(columns=["clean_phone"])
-
+    print(" -> Loading input file and removing matches (in chunks)...")
+    header = table_header(a["order"])
+    phone_col = find_phone_column(header)
     nodup_path = out / "combined_data_nodup.csv"
-    kept.to_csv(nodup_path, index=False)
-    removed.to_csv(out / "combined_data_removed_matches.csv", index=False)
-    print(f"Records kept: {len(kept):,}")
-    print(f"Records removed: {len(removed):,}")
+    removed_path = out / "combined_data_removed_matches.csv"
+    kept_n = removed_n = 0
+    wrote_kept = wrote_removed = False
+    written = {}          # split file name -> rows written
+    state_missing = False
 
-    print("\n--- Starting Data Splitting by STATE ---")
-    df = pd.read_csv(nodup_path, low_memory=False, dtype=str)
-    df.columns = df.columns.astype(str).str.strip().str.upper()
-    if "STATE" not in df.columns:
+    for chunk in iter_table(a["order"]):
+        clean = clean_phone_last10(chunk[phone_col])
+        is_match = clean.isin(exclude).reindex(chunk.index, fill_value=False)
+        removed, kept = chunk[is_match], chunk[~is_match]
+        removed_n += len(removed)
+        kept_n += len(kept)
+        removed.to_csv(removed_path, mode="a", header=not wrote_removed, index=False)
+        kept.to_csv(nodup_path, mode="a", header=not wrote_kept, index=False)
+        wrote_removed = wrote_kept = True
+
+        part = kept.copy()
+        part.columns = part.columns.astype(str).str.strip().str.upper()
+        if "STATE" not in part.columns:
+            state_missing = True
+            continue
+        part["STATE"] = part["STATE"].fillna("UNKNOWN").astype(str).str.strip().str.upper()
+        for state, grp in part.groupby("STATE", sort=False):
+            clean_state = "".join(ch for ch in str(state) if ch.isalnum()) or "UNKNOWN"
+            file_name = name_format.format(clean_state)
+            grp.to_csv(split_dir / file_name, mode="a", header=file_name not in written, index=False)
+            written[file_name] = written.get(file_name, 0) + len(grp)
+
+    if not wrote_kept:  # empty input
+        header.to_csv(nodup_path, index=False)
+        header.to_csv(removed_path, index=False)
+
+    print(f"Records kept: {kept_n:,}")
+    print(f"Records removed: {removed_n:,}")
+    print("\n--- Data Splitting by STATE ---")
+    if state_missing:
         print("STATE column not found. Skipping split.")
-        return
-    df["STATE"] = df["STATE"].fillna("UNKNOWN").astype(str).str.strip().str.upper()
-    for state in df["STATE"].unique():
-        part = df[df["STATE"] == state]
-        clean_state = "".join(ch for ch in str(state) if ch.isalnum()) or "UNKNOWN"
-        file_name = name_format.format(clean_state)
-        part.to_csv(split_dir / file_name, index=False)
-        print(f"Saved {file_name} ({len(part):,} records)")
+    for file_name, n in written.items():
+        print(f"Saved {file_name} ({n:,} records)")
 
 
 # =====================================================================
 # Tool 2 - RE Pipeline
 # =====================================================================
 def clean_phone_re(series):
-    s = series.astype(str).str.strip().str.replace(r"\D", "", regex=True)
-    s = s.apply(lambda x: x[:-1] if (isinstance(x, str) and len(x) > 10 and x.endswith("0")) else x)
-    s = s.apply(lambda x: x[-10:] if (isinstance(x, str) and len(x) >= 10) else x)
+    s = series.fillna("").astype(str).str.strip().str.replace(r"\D", "", regex=True)
+    s = s.mask((s.str.len() > 10) & s.str.endswith("0"), s.str[:-1])
+    s = s.mask(s.str.len() >= 10, s.str[-10:])
     return s
 
 
@@ -162,13 +220,15 @@ def process_list_file(input_file, out_base, exclude, fmt, valid_zips):
     new_dnc = set()
 
     try:
-        df = pd.read_csv(input_file, sep="\t", dtype={"postal_code": str, "phone_number": str},
-                         low_memory=False, on_bad_lines="skip", encoding="ISO-8859-1")
+        df = pd.read_csv(input_file, sep="\t", dtype=str, on_bad_lines="skip", encoding="ISO-8859-1",
+                         usecols=["phone_number", "first_name", "last_name", "address1", "city",
+                                  "state", "postal_code", "status"])
         statuses = ["AA", "A", "AB", "AL", "B", "AM", "CBHOLD", "CALLBK", "DAIR", "DEC", "DROP", "NEW",
                     "N", "NP", "PDROP", "DC", "PU", "OA", "ERI", "UA", "DNC"]
         df = df[df["status"].isin(statuses)]
         sel = df[["phone_number", "first_name", "last_name", "address1", "city", "state",
                   "postal_code", "status"]].copy()
+        del df
         sel["state"] = sel["state"].astype(str).fillna("Unknown").replace("nan", "Unknown").str.strip().str.upper()
 
         special = ["AA", "AM", "NEW", "CALLBK", "DNC"]
@@ -251,7 +311,7 @@ def update_dnc_file(dnc_path, new_phones, out_path):
         print("All DNC phones already exist in master DNC file.")
         return
     print(f"Adding {len(truly_new)} new DNC phones to master DNC file...")
-    add = pd.DataFrame({existing.columns[0]: list(truly_new)})
+    add = pd.DataFrame({existing.columns[0]: sorted(truly_new)})
     updated = pd.concat([existing, add], ignore_index=True)
     updated.to_excel(out_path, index=False)
     print(f"Updated DNC file saved as DNC_updated.xlsx: {len(updated)} total records")
@@ -264,32 +324,33 @@ def run_re(a, out):
     print("=" * 60)
 
     print("Loading reference data...")
-    crm = pd.read_csv(a["crm"])
+    exclude = set()
+    crm = pd.read_csv(a["crm"], usecols=["Mobile Phone"], dtype=str)
     print(f"  -> Loaded CRM: {len(crm)} records")
+    exclude.update(clean_phone_re(crm["Mobile Phone"]))
+    del crm
     am_txt = pd.read_csv(a["am_txt"], header=None, names=["AM_PHONE"], dtype=str, low_memory=False)
     print(f"  -> Loaded Answer Machine TXT: {len(am_txt)} records")
-    am_xl = pd.read_excel(a["am_excel"])
+    exclude.update(clean_phone_re(am_txt["AM_PHONE"]))
+    del am_txt
+    am_xl = pd.read_excel(a["am_excel"], usecols=["Mobile Phone"], dtype=str)
     print(f"  -> Loaded Answer Machine Excel: {len(am_xl)} records")
+    exclude.update(clean_phone_re(am_xl["Mobile Phone"]))
+    del am_xl
     try:
-        dnc = pd.read_excel(a["dnc"])
+        dnc = pd.read_excel(a["dnc"], usecols=[0], dtype=str)
         print(f"  -> Loaded DNC file: {len(dnc)} records")
-    except Exception as e:
-        print(f"  -> Error loading DNC file: {e}")
-        dnc = pd.DataFrame()
-
-    print("Building exclusion phone set...")
-    exclude = set(clean_phone_re(crm["Mobile Phone"]))
-    exclude.update(set(clean_phone_re(am_txt["AM_PHONE"])))
-    exclude.update(set(clean_phone_re(am_xl["Mobile Phone"])))
-    if not dnc.empty:
         dnc_phones = clean_phone_re(dnc.iloc[:, 0])
         exclude.update(set(dnc_phones))
         print(f"  -> Added {len(dnc_phones)} DNC phones to exclusion set")
-    print(f"  -> Total exclusion phones: {len(exclude)}")
+        del dnc
+    except Exception as e:
+        print(f"  -> Error loading DNC file: {e}")
+    print(f"Building exclusion phone set... total exclusion phones: {len(exclude)}")
 
     print("Loading valid ZIP codes...")
     try:
-        zdf = pd.read_csv(a["zip_file"])
+        zdf = pd.read_csv(a["zip_file"], usecols=["ZIP Code"], dtype=str)
         valid_zips = set(zdf["ZIP Code"].astype(str).str.strip())
         print(f"  -> Loaded {len(valid_zips):,} valid ZIP codes")
     except Exception as e:

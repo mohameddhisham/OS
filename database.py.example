@@ -1,0 +1,11 @@
+# database.py.example - This is a template for documentation only
+# The actual database.py uses Streamlit Secrets for credentials
+# DO NOT commit database.py with real credentials to git
+
+import streamlit as st
+
+HOST = st.secrets["HOST"]
+PORT = st.secrets["PORT"]
+USER = st.secrets["USER"]
+PASSWORD = st.secrets["PASSWORD"]
+SCHEMA = st.secrets["SCHEMA"]

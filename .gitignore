@@ -2,5 +2,4 @@
 *.pyc
 *.pyo
 .streamlit/secrets.toml
-database.py
-.streamlit/
+saved_crm_data/

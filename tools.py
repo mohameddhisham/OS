@@ -58,7 +58,7 @@ def clean_phone_last10(series):
 
 def find_phone_column(df):
     normalized = {str(c).strip().upper(): c for c in df.columns}
-    for name in ["PHONE", "PHONE_NUMBER", "MOBILE PHONE", "MOBILE_PHONE", "MOBILE", "TEL", "TELEPHONE", "NUMBER"]:
+    for name in ["PHONE", "PHONE_NUMBER", "MOBILE PHONE", "MOBILE_PHONE", "MOBILE", "TEL", "TELEPHONE", "NUMBER", "PHONE NUMBER"]:
         if name in normalized:
             return normalized[name]
     print(f"Warning: No recognized phone column found. Using first column: {df.columns[0]}")
@@ -194,9 +194,12 @@ def clean_phone_re(series):
 
 
 def extract_list_id(file_name):
+    """Extract list ID from filename - just use the base name without extension."""
     name = os.path.splitext(file_name)[0]
-    parts = name.split("_")
-    return parts[1] if len(parts) >= 2 else name
+    # Remove any special characters, keep alphanumeric and underscores
+    import re
+    clean_name = re.sub(r'[^\w]', '_', name)
+    return clean_name
 
 
 def split_by_state(df, split_dir, list_name, fmt):
@@ -220,16 +223,32 @@ def process_list_file(input_file, out_base, exclude, fmt, valid_zips):
     new_dnc = set()
 
     try:
-        df = pd.read_csv(input_file, sep="\t", dtype=str, on_bad_lines="skip", encoding="ISO-8859-1",
-                         usecols=["phone_number", "first_name", "last_name", "address1", "city",
-                                  "state", "postal_code", "status"])
+        df = pd.read_csv(input_file, sep="\t", dtype=str, on_bad_lines="skip", encoding="ISO-8859-1")
+        
+        # Find columns by name (case-insensitive)
+        col_map = {str(c).strip().lower(): c for c in df.columns}
+        
+        phone_col = col_map.get("phone_number", col_map.get("phone", df.columns[0]))
+        status_col = col_map.get("status", df.columns[-1])
+        state_col = col_map.get("state", col_map.get("st", None))
+        zip_col = col_map.get("postal_code", col_map.get("zip", col_map.get("postalcode", None)))
+        
         statuses = ["AA", "A", "AB", "AL", "B", "AM", "CBHOLD", "CALLBK", "DAIR", "DEC", "DROP", "NEW",
                     "N", "NP", "PDROP", "DC", "PU", "OA", "ERI", "UA", "DNC"]
-        df = df[df["status"].isin(statuses)]
-        sel = df[["phone_number", "first_name", "last_name", "address1", "city", "state",
-                  "postal_code", "status"]].copy()
+        df = df[df[status_col].isin(statuses)]
+        
+        # Keep all columns but rename key ones
+        df = df.rename(columns={phone_col: "phone_number", status_col: "status"})
+        if state_col:
+            df = df.rename(columns={state_col: "state"})
+        if zip_col:
+            df = df.rename(columns={zip_col: "postal_code"})
+        
+        sel = df.copy()
         del df
-        sel["state"] = sel["state"].astype(str).fillna("Unknown").replace("nan", "Unknown").str.strip().str.upper()
+        
+        if "state" in sel.columns:
+            sel["state"] = sel["state"].astype(str).fillna("Unknown").replace("nan", "Unknown").str.strip().str.upper()
 
         special = ["AA", "AM", "NEW", "CALLBK", "DNC"]
         normal = sel[~sel["status"].isin(special)].copy()
@@ -325,20 +344,22 @@ def run_re(a, out):
 
     print("Loading reference data...")
     exclude = set()
-    crm = pd.read_csv(a["crm"], usecols=["Mobile Phone"], dtype=str)
-    print(f"  -> Loaded CRM: {len(crm)} records")
-    exclude.update(clean_phone_re(crm["Mobile Phone"]))
+    crm = pd.read_csv(a["crm"], dtype=str)
+    crm_phone_col = find_phone_column(crm)
+    print(f"  -> Loaded CRM: {len(crm)} records (phone column: {crm_phone_col})")
+    exclude.update(clean_phone_re(crm[crm_phone_col]))
     del crm
     am_txt = pd.read_csv(a["am_txt"], header=None, names=["AM_PHONE"], dtype=str, low_memory=False)
     print(f"  -> Loaded Answer Machine TXT: {len(am_txt)} records")
     exclude.update(clean_phone_re(am_txt["AM_PHONE"]))
     del am_txt
-    am_xl = pd.read_excel(a["am_excel"], usecols=["Mobile Phone"], dtype=str)
-    print(f"  -> Loaded Answer Machine Excel: {len(am_xl)} records")
-    exclude.update(clean_phone_re(am_xl["Mobile Phone"]))
+    am_xl = pd.read_excel(a["am_excel"], dtype=str)
+    am_xl_phone_col = find_phone_column(am_xl)
+    print(f"  -> Loaded Answer Machine Excel: {len(am_xl)} records (phone column: {am_xl_phone_col})")
+    exclude.update(clean_phone_re(am_xl[am_xl_phone_col]))
     del am_xl
     try:
-        dnc = pd.read_excel(a["dnc"], usecols=[0], dtype=str)
+        dnc = pd.read_excel(a["dnc"], dtype=str)
         print(f"  -> Loaded DNC file: {len(dnc)} records")
         dnc_phones = clean_phone_re(dnc.iloc[:, 0])
         exclude.update(set(dnc_phones))
@@ -350,9 +371,18 @@ def run_re(a, out):
 
     print("Loading valid ZIP codes...")
     try:
-        zdf = pd.read_csv(a["zip_file"], usecols=["ZIP Code"], dtype=str)
-        valid_zips = set(zdf["ZIP Code"].astype(str).str.strip())
-        print(f"  -> Loaded {len(valid_zips):,} valid ZIP codes")
+        zdf = pd.read_csv(a["zip_file"], dtype=str)
+        # Find ZIP column
+        zip_col = None
+        for col in zdf.columns:
+            if "zip" in str(col).lower():
+                zip_col = col
+                break
+        if zip_col is None:
+            zip_col = zdf.columns[0]
+            print(f"  -> Warning: No ZIP column found, using first column: {zip_col}")
+        valid_zips = set(zdf[zip_col].astype(str).str.strip())
+        print(f"  -> Loaded {len(valid_zips):,} valid ZIP codes (column: {zip_col})")
     except Exception as e:
         print(f"  -> Error loading ZIP validation file: {e}")
         valid_zips = set()

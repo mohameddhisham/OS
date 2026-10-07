@@ -1,6 +1,6 @@
 """Database viewer page - shows databases, tables and record counts."""
 import psycopg2
-from database import HOST, PORT, USER, PASSWORD
+from database import HOST, PORT, USER, PASSWORD, SCHEMA
 
 
 def get_databases():
@@ -37,10 +37,10 @@ def get_table_counts(database_name):
         cursor = conn.cursor()
 
         # Get all table names
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT table_name 
             FROM information_schema.tables 
-            WHERE table_schema = 'public'
+            WHERE table_schema = '{SCHEMA}'
             ORDER BY table_name
         """)
         tables = [row[0] for row in cursor.fetchall()]

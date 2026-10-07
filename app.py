@@ -11,6 +11,7 @@ import streamlit as st
 
 from tools import TOOLS, run_tool, safe_name
 from db_page import show_database_page
+from crm_analysis import save_crm_data, show_crm_analysis_page
 
 st.set_page_config(page_title="Data Tools", layout="centered")
 
@@ -75,6 +76,15 @@ def process(key, spec, values):
                     path = folder / safe_name(v.name)
                     path.write_bytes(v.getbuffer())
                     args[f["name"]] = path
+                    
+                    # Save CRM data for analysis
+                    if f["name"] == "crm":
+                        import pandas as pd
+                        try:
+                            df = pd.read_csv(path)
+                            save_crm_data(df, v.name)
+                        except:
+                            pass
                 elif f.get("default"):
                     # Use default file path
                     default_path = Path(f["default"])
@@ -152,7 +162,7 @@ with st.sidebar:
         st.rerun()
     
     st.divider()
-    page = st.radio("Select Page", ["Data Tools", "Database Viewer"])
+    page = st.radio("Select Page", ["Data Tools", "CRM Analysis", "Database Viewer"])
 
 if page == "Data Tools":
     st.title("Data Tools")
@@ -218,5 +228,7 @@ if page == "Data Tools":
                     with st.spinner("Processing your files..."):
                         st.session_state.setdefault("results", {})[key] = process(key, spec, values)
             show_results(key)
+elif page == "CRM Analysis":
+    show_crm_analysis_page()
 else:
     show_database_page()

@@ -1,16 +1,17 @@
 """Database viewer page - shows databases, tables and record counts."""
 import psycopg2
-from database import HOST, PORT, USER, PASSWORD, SCHEMA
+from database import get_db_config
 
 
 def get_databases():
     """Get all database names from the server."""
     try:
+        config = get_db_config()
         conn = psycopg2.connect(
-            host=HOST,
-            port=PORT,
-            user=USER,
-            password=PASSWORD,
+            host=config["HOST"],
+            port=config["PORT"],
+            user=config["USER"],
+            password=config["PASSWORD"],
             database="postgres"
         )
         conn.autocommit = True
@@ -27,11 +28,12 @@ def get_databases():
 def get_table_counts(database_name):
     """Get all table names and their row counts from a specific database."""
     try:
+        config = get_db_config()
         conn = psycopg2.connect(
-            host=HOST,
-            port=PORT,
-            user=USER,
-            password=PASSWORD,
+            host=config["HOST"],
+            port=config["PORT"],
+            user=config["USER"],
+            password=config["PASSWORD"],
             database=database_name
         )
         cursor = conn.cursor()
@@ -40,7 +42,7 @@ def get_table_counts(database_name):
         cursor.execute(f"""
             SELECT table_name 
             FROM information_schema.tables 
-            WHERE table_schema = '{SCHEMA}'
+            WHERE table_schema = '{config["SCHEMA"]}'
             ORDER BY table_name
         """)
         tables = [row[0] for row in cursor.fetchall()]

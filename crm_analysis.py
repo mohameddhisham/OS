@@ -39,13 +39,13 @@ def categorize_status(status):
     status = str(status).strip().lower()
     
     # Opening statuses (transfers or red flag)
-    opening_keywords = ["transfer", "red flag", "redflag"]
+    opening_keywords = ["Transferred", "Red Flag", "redflag"]
     if any(keyword in status for keyword in opening_keywords):
         return "Opening"
     
-    # Closing/Sales statuses
-    closing_keywords = ["approved", "postadeted", "pending client reply", 
-                       "pending bank approval"]
+    # Closing/Sales statuses (from Closing Status column)
+    closing_keywords = ["approved", "postdated", "pending client reply", 
+                       "pending bank approval", "retransfer to client"]
     if any(keyword in status for keyword in closing_keywords):
         return "Sales"
     
@@ -71,7 +71,16 @@ def show_crm_analysis_page():
         st.dataframe(df.head(100), use_container_width=True)
     
     # Add status categorization
-    df['Status_Category'] = df.apply(lambda row: categorize_status(row.get('Status', row.get('status', ''))), axis=1)
+    # Try to find Closing Status column first, then Status
+    status_col = None
+    for col in df.columns:
+        if 'closing status' in col.lower() or 'closingstatus' in col.lower():
+            status_col = col
+            break
+    if not status_col:
+        status_col = 'Status' if 'Status' in df.columns else ('status' if 'status' in df.columns else df.columns[0])
+    
+    df['Status_Category'] = df[status_col].apply(categorize_status)
     
     # Try to find date column
     date_col = None
@@ -126,53 +135,60 @@ def show_crm_analysis_page():
     
     # Status Category Distribution
     st.subheader("Status Category Distribution")
-    status_counts = df['Status_Category'].value_counts()
-    fig_status = px.pie(values=status_counts.values, names=status_counts.index, 
+    status_counts = df['Status_Category'].value_counts().reset_index()
+    status_counts.columns = ['Category', 'Count']
+    fig_status = px.pie(status_counts, values='Count', names='Category', 
                         title="Status Category Distribution")
     st.plotly_chart(fig_status, use_container_width=True)
     
     # By State
     if state_col:
         st.subheader("Records by State")
-        state_counts = df[state_col].value_counts().head(20)
-        fig_state = px.bar(x=state_counts.index, y=state_counts.values,
+        state_counts = df[state_col].value_counts().head(20).reset_index()
+        state_counts.columns = ['State', 'Count']
+        fig_state = px.bar(state_counts, x='State', y='Count',
                           title="Top 20 States by Record Count")
         st.plotly_chart(fig_state, use_container_width=True)
         
         # Sales by State
         st.subheader("Sales by State")
-        sales_by_state = df[df['Status_Category'] == 'Sales'][state_col].value_counts().head(20)
-        fig_sales_state = px.bar(x=sales_by_state.index, y=sales_by_state.values,
+        sales_by_state = df[df['Status_Category'] == 'Sales'][state_col].value_counts().head(20).reset_index()
+        sales_by_state.columns = ['State', 'Count']
+        fig_sales_state = px.bar(sales_by_state, x='State', y='Count',
                                  title="Top 20 States by Sales Count")
         st.plotly_chart(fig_sales_state, use_container_width=True)
     
     # Top Day of Week
     if date_col:
         st.subheader("Top Day of Week")
-        day_counts = df['Day_of_Week'].value_counts()
-        fig_day = px.bar(x=day_counts.index, y=day_counts.values,
+        day_counts = df['Day_of_Week'].value_counts().reset_index()
+        day_counts.columns = ['Day', 'Count']
+        fig_day = px.bar(day_counts, x='Day', y='Count',
                         title="Records by Day of Week")
         st.plotly_chart(fig_day, use_container_width=True)
         
         # Top Month
         st.subheader("Top Month")
-        month_counts = df['Month'].value_counts()
-        fig_month = px.bar(x=month_counts.index, y=month_counts.values,
+        month_counts = df['Month'].value_counts().reset_index()
+        month_counts.columns = ['Month', 'Count']
+        fig_month = px.bar(month_counts, x='Month', y='Count',
                           title="Records by Month")
         st.plotly_chart(fig_month, use_container_width=True)
     
     # Top Agent
     if agent_col:
         st.subheader("Top Agents")
-        agent_counts = df[agent_col].value_counts().head(15)
-        fig_agent = px.bar(x=agent_counts.index, y=agent_counts.values,
+        agent_counts = df[agent_col].value_counts().head(15).reset_index()
+        agent_counts.columns = ['Agent', 'Count']
+        fig_agent = px.bar(agent_counts, x='Agent', y='Count',
                           title="Top 15 Agents by Record Count")
         st.plotly_chart(fig_agent, use_container_width=True)
         
         # Sales by Agent
         st.subheader("Sales by Agent")
-        sales_by_agent = df[df['Status_Category'] == 'Sales'][agent_col].value_counts().head(15)
-        fig_sales_agent = px.bar(x=sales_by_agent.index, y=sales_by_agent.values,
+        sales_by_agent = df[df['Status_Category'] == 'Sales'][agent_col].value_counts().head(15).reset_index()
+        sales_by_agent.columns = ['Agent', 'Count']
+        fig_sales_agent = px.bar(sales_by_agent, x='Agent', y='Count',
                                 title="Top 15 Agents by Sales Count")
         st.plotly_chart(fig_sales_agent, use_container_width=True)
     

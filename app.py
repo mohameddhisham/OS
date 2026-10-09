@@ -66,6 +66,9 @@ def process(key, spec, values):
             if f["kind"] == "text":
                 args[f["name"]] = (v or "").strip()
                 continue
+            if f["kind"] == "check":
+                args[f["name"]] = bool(v)
+                continue
             
             # Check if user uploaded a file, otherwise use default path
             if f["kind"] == "file":
@@ -79,9 +82,9 @@ def process(key, spec, values):
                     
                     # Save CRM data for analysis
                     if f["name"] == "crm":
-                        import pandas as pd
+                        from tools import read_file
                         try:
-                            df = pd.read_csv(path)
+                            df = read_file(path)
                             save_crm_data(df, v.name)
                         except:
                             pass
@@ -182,6 +185,9 @@ if page == "Data Tools":
                     wid = f"{key}_{f['name']}"
                     if f["kind"] == "text":
                         values[f["name"]] = st.text_input(f["label"], value=f["default"], help=f.get("hint"), key=wid)
+                    elif f["kind"] == "check":
+                        values[f["name"]] = st.checkbox(f["label"], value=f.get("default", False),
+                                                        help=f.get("hint"), key=wid)
                     else:
                         types = [e.strip().lstrip(".") for e in f["accept"].split(",") if e.strip()]
                         
@@ -215,7 +221,7 @@ if page == "Data Tools":
                 # Check for missing required files (only those without defaults)
                 missing = []
                 for f in spec["fields"]:
-                    if f["kind"] != "text":
+                    if f["kind"] not in ("text", "check"):
                         if f["kind"] == "file" and f.get("default"):
                             # Has default, so it's not required to upload
                             continue

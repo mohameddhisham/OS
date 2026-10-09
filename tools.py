@@ -68,6 +68,41 @@ def find_phone_column(df):
 CHUNK_ROWS = 100_000
 
 
+def update_dnc_file(dnc_path, new_phones, out_path):
+    """Append new phones to the original DNC file and save a copy in the results."""
+    if not new_phones:
+        print("No new DNC phones to add to master DNC file.")
+        return
+
+    try:
+        existing = read_file(dnc_path, dtype=str)
+        # Normalize existing phones using clean_phone_re for consistency
+        existing_phones = set(clean_phone_re(existing.iloc[:, 0]))
+
+        truly_new = new_phones - existing_phones
+        if not truly_new:
+            print("All DNC phones already exist in master DNC file.")
+            return
+        print(f"Adding {len(truly_new)} new DNC phones to master DNC file...")
+        add = pd.DataFrame({existing.columns[0]: sorted(truly_new)})
+        updated = pd.concat([existing, add], ignore_index=True)
+
+        # Update the original DNC file in place
+        try:
+            if is_excel(dnc_path):
+                updated.to_excel(dnc_path, index=False)
+            else:
+                updated.to_csv(dnc_path, index=False)
+            print(f"Original DNC file updated: {os.path.basename(str(dnc_path))} ({len(updated)} total records)")
+        except Exception as e:
+            print(f"Could not update original DNC file: {e}")
+
+        updated.to_excel(out_path, index=False)
+        print(f"Updated DNC file saved as DNC_updated.xlsx: {len(updated)} total records")
+    except Exception as e:
+        print(f"Error updating DNC file: {e}")
+
+
 def detect_encoding(path):
     """Pick the first encoding that can decode the whole file (streamed, low memory)."""
     for enc in ("utf-8-sig", "cp1252", "ISO-8859-1"):
@@ -119,6 +154,7 @@ def run_remove(a, out):
 
     print("--- Starting Multi-Stage Filtering ---")
     exclude = set()
+    new_dnc_phones = set()  # Track new DNC phones found in input file
 
     print(" -> Loading CRM...")
     exclude.update(read_phone_set(a["crm"]))
@@ -148,6 +184,12 @@ def run_remove(a, out):
     written = {}          # split file name -> rows written
     state_missing = False
 
+    # Check if input file has a status column for DNC tracking
+    col_map = {str(c).strip().lower(): c for c in header.columns}
+    status_col = col_map.get("status", None)
+    if status_col:
+        print(f" -> Found status column: {status_col} - will track DNC records")
+
     for chunk in iter_table(a["order"]):
         clean = clean_phone_last10(chunk[phone_col])
         is_match = clean.isin(exclude).reindex(chunk.index, fill_value=False)
@@ -157,6 +199,13 @@ def run_remove(a, out):
         removed.to_csv(removed_path, mode="a", header=not wrote_removed, index=False)
         kept.to_csv(nodup_path, mode="a", header=not wrote_kept, index=False)
         wrote_removed = wrote_kept = True
+
+        # Track DNC records from input file if status column exists
+        if status_col:
+            dnc_records = chunk[chunk[status_col].astype(str).str.upper() == "DNC"]
+            if not dnc_records.empty:
+                dnc_clean = clean_phone_last10(dnc_records[phone_col])
+                new_dnc_phones.update(dnc_clean.tolist())
 
         part = kept.copy()
         part.columns = part.columns.astype(str).str.strip().str.upper()
@@ -182,6 +231,15 @@ def run_remove(a, out):
     for file_name, n in written.items():
         print(f"Saved {file_name} ({n:,} records)")
 
+    # Update DNC file with new DNC phones found
+    if new_dnc_phones:
+        print(f"\n--- Updating DNC File ---")
+        print(f"Found {len(new_dnc_phones)} DNC records in input file")
+        update_dnc_file(a["dnc"], new_dnc_phones, out / "DNC_updated.xlsx")
+    else:
+        print(f"\n--- DNC Update ---")
+        print("No new DNC records found in input file")
+
 
 # =====================================================================
 # Tool 2 - RE Pipeline
@@ -196,10 +254,7 @@ def clean_phone_re(series):
 def extract_list_id(file_name):
     """Extract list ID from filename - just use the base name without extension."""
     name = os.path.splitext(file_name)[0]
-    # Remove any special characters, keep alphanumeric and underscores
-    import re
-    clean_name = re.sub(r'[^\w]', '_', name)
-    return clean_name
+    return name
 
 
 def split_by_state(df, split_dir, list_name, fmt):
@@ -212,9 +267,9 @@ def split_by_state(df, split_dir, list_name, fmt):
         print(f"  -> {state}: {len(part)} records")
 
 
-def process_list_file(input_file, out_base, exclude, fmt, valid_zips):
-    file_name = os.path.basename(input_file)
-    list_name = extract_list_id(file_name)
+def process_list_file(input_file, out_base, exclude, fmt, valid_zips, preloaded=None, list_name=None):
+    file_name = os.path.basename(input_file) if input_file is not None else "combined_lists"
+    list_name = list_name or extract_list_id(file_name)
     print(f"\n{'=' * 60}\nProcessing: {file_name} -> Output as: {list_name}\n{'=' * 60}")
 
     list_dir = out_base / list_name
@@ -223,7 +278,10 @@ def process_list_file(input_file, out_base, exclude, fmt, valid_zips):
     new_dnc = set()
 
     try:
-        df = pd.read_csv(input_file, sep="\t", dtype=str, on_bad_lines="skip", encoding="ISO-8859-1")
+        if preloaded is not None:
+            df = preloaded.copy()
+        else:
+            df = pd.read_csv(input_file, sep="\t", dtype=str, on_bad_lines="skip", encoding="ISO-8859-1")
         
         # Find columns by name (case-insensitive)
         col_map = {str(c).strip().lower(): c for c in df.columns}
@@ -301,13 +359,13 @@ def process_list_file(input_file, out_base, exclude, fmt, valid_zips):
             zip_clean = filtered["postal_code"].astype(str).str.strip()
             ok = zip_clean.isin(valid_zips)
             invalid = filtered[~ok]
-            invalid.to_csv(list_dir / f"{list_name}_invalidzip.csv", index=False, encoding="utf-8")
-            print(f"Saved invalid ZIP records: {len(invalid)} records to {list_name}_invalidzip.csv")
+            invalid.to_csv(list_dir / f"{list_name}_nodup.csv", index=False, encoding="utf-8")
+            print(f"Saved invalid ZIP records: {len(invalid)} records to {list_name}_nodup.csv")
             filtered = filtered[ok].copy()
             print(f"Valid ZIP records for processing: {len(filtered)} records")
 
-        filtered.to_csv(list_dir / f"{list_name}_nodup.csv", index=False, encoding="utf-8")
-        print(f"Saved nodup data (AA + NEW + normal, valid ZIP, no TX, no DNC): {len(filtered)} records")
+        filtered.to_csv(list_dir / f"{list_name}_filtersZIP.csv", index=False, encoding="utf-8")
+        print(f"Saved filtersZIP data (AA + NEW + normal, valid ZIP, no TX, no DNC): {len(filtered)} records")
 
         if not filtered.empty:
             split_by_state(filtered, split_dir, list_name, fmt)
@@ -319,23 +377,6 @@ def process_list_file(input_file, out_base, exclude, fmt, valid_zips):
     return True, counts, frames, list_name, new_dnc
 
 
-def update_dnc_file(dnc_path, new_phones, out_path):
-    if not new_phones:
-        print("No new DNC phones to add to master DNC file.")
-        return
-    existing = pd.read_excel(dnc_path)
-    existing_phones = set(clean_phone_re(existing.iloc[:, 0]))
-    truly_new = new_phones - existing_phones
-    if not truly_new:
-        print("All DNC phones already exist in master DNC file.")
-        return
-    print(f"Adding {len(truly_new)} new DNC phones to master DNC file...")
-    add = pd.DataFrame({existing.columns[0]: sorted(truly_new)})
-    updated = pd.concat([existing, add], ignore_index=True)
-    updated.to_excel(out_path, index=False)
-    print(f"Updated DNC file saved as DNC_updated.xlsx: {len(updated)} total records")
-
-
 def run_re(a, out):
     fmt = need_placeholder(a["name_format"])
     print("=" * 60)
@@ -344,7 +385,7 @@ def run_re(a, out):
 
     print("Loading reference data...")
     exclude = set()
-    crm = pd.read_csv(a["crm"], dtype=str)
+    crm = read_file(a["crm"], dtype=str)
     crm_phone_col = find_phone_column(crm)
     print(f"  -> Loaded CRM: {len(crm)} records (phone column: {crm_phone_col})")
     exclude.update(clean_phone_re(crm[crm_phone_col]))
@@ -388,14 +429,32 @@ def run_re(a, out):
         valid_zips = set()
 
     files = sorted(a["lists"], key=lambda p: p.name)
+    combine = bool(a.get("combine"))
     print(f"\nFound {len(files)} files to process")
+    if combine:
+        print(" -> Combine mode ON: merging all list files into one list")
+
+        parts = []
+        for f in files:
+            try:
+                parts.append(pd.read_csv(f, sep="\t", dtype=str, on_bad_lines="skip", encoding="ISO-8859-1"))
+            except Exception as e:
+                print(f" ERROR reading {f.name}: {type(e).__name__}: {e}")
+        if not parts:
+            raise ValueError("No readable list files to combine.")
+        combined_df = pd.concat(parts, ignore_index=True)
+        print(f" -> Combined {len(parts)} file(s): {len(combined_df):,} records")
+        jobs = [(None, combined_df, "COMBINED")]
+    else:
+        jobs = [(f, None, None) for f in files]
 
     ok_n = fail_n = 0
     totals = {"AA": 0, "AM": 0, "NEW": 0, "CALLBK": 0, "DNC": 0}
     all_special = {"AM": [], "DNC": []}
     all_new_dnc, ids = set(), []
-    for f in files:
-        ok, counts, frames, list_id, new_dnc = process_list_file(f, out, exclude, fmt, valid_zips)
+    for f, preloaded, lname in jobs:
+        ok, counts, frames, list_id, new_dnc = process_list_file(f, out, exclude, fmt, valid_zips,
+                                                                 preloaded=preloaded, list_name=lname)
         if ok:
             ok_n += 1
             ids.append(list_id)
@@ -413,15 +472,21 @@ def run_re(a, out):
             merged.to_csv(out / f"ALL_{k}_RECORDS.csv", index=False, encoding="utf-8")
             print(f"\nConsolidated {k} file saved: ALL_{k}_RECORDS.csv ({len(merged)} records)")
 
-    if all_new_dnc:
-        print(f"\nFound {len(all_new_dnc)} new DNC phones across all files")
-        update_dnc_file(a["dnc"], all_new_dnc, out / "DNC_updated.xlsx")
-
     print(f"\n{'=' * 60}\nPROCESSING COMPLETE")
     print(f"Successful: {ok_n}\nFailed: {fail_n}\nProcessed List IDs: {', '.join(ids)}")
     for k, v in totals.items():
         print(f"Total {k} Records Found: {v:,}")
-    print(f"Total New DNC Phones Added: {len(all_new_dnc):,}\n{'=' * 60}")
+    print(f"Total New DNC Phones Found: {len(all_new_dnc):,}")
+    
+    # Update DNC file with new DNC phones found across all files
+    if all_new_dnc:
+        print(f"\n--- Updating DNC File ---")
+        update_dnc_file(a["dnc"], all_new_dnc, out / "DNC_updated.xlsx")
+    else:
+        print(f"\n--- DNC Update ---")
+        print("No new DNC phones found across all files")
+    
+    print(f"{'=' * 60}")
 
 
 # =====================================================================
@@ -553,7 +618,11 @@ TOOLS = {
         fn=run_re,
         fields=[
             dict(name="lists", label="List files (.txt, select several)", kind="files", accept=".txt"),
-            dict(name="crm", label="CRM file (.csv)", kind="file", accept=".csv"),
+            dict(name="combine", label="Combine all lists into one combined list output", kind="check",
+                 default=False,
+                 hint="Checked: every selected list file is merged and processed as a single list. "
+                      "Unchecked: each list file is processed separately."),
+            dict(name="crm", label="CRM file (.csv / .xlsx / .xls / .xlsm)", kind="file", accept=CSV_XLSX),
             dict(name="am_txt", label="Answer Machine Calls (.txt)", kind="file", accept=".txt,.csv"),
             dict(name="am_excel", label="Answer Machine Calls (Excel)", kind="file", accept=".xlsx,.xls",
                  default=str(Path(__file__).parent / "filles" / "Answer Machine Calls.xlsx")),

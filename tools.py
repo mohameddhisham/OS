@@ -292,7 +292,7 @@ def process_list_file(input_file, out_base, exclude, fmt, valid_zips, preloaded=
         zip_col = col_map.get("postal_code", col_map.get("zip", col_map.get("postalcode", None)))
         
         statuses = ["AA", "A", "AB", "AL", "B", "AM", "CBHOLD", "CALLBK", "DAIR", "DEC", "DROP", "NEW",
-                    "N", "NP", "PDROP", "DC", "PU", "OA", "ERI", "UA", "DNC"]
+                    "N", "NP", "PDROP", "DC", "PU", "OA", "ERI", "UA", "DNC", "U"]
         df = df[df[status_col].isin(statuses)]
         
         # Keep all columns but rename key ones
@@ -308,14 +308,15 @@ def process_list_file(input_file, out_base, exclude, fmt, valid_zips, preloaded=
         if "state" in sel.columns:
             sel["state"] = sel["state"].astype(str).fillna("Unknown").replace("nan", "Unknown").str.strip().str.upper()
 
-        special = ["AA", "AM", "NEW", "CALLBK", "DNC"]
+        special = ["AA", "AM", "NEW", "CALLBK", "DNC", "U"]
         normal = sel[~sel["status"].isin(special)].copy()
         aa = sel[sel["status"] == "AA"].copy()
         am = sel[sel["status"] == "AM"].copy()
         new = sel[sel["status"] == "NEW"].copy()
         callbk = sel[sel["status"] == "CALLBK"].copy()
         dnc = sel[sel["status"] == "DNC"].copy()
-        counts = {"AA": len(aa), "AM": len(am), "NEW": len(new), "CALLBK": len(callbk), "DNC": len(dnc)}
+        u = sel[sel["status"] == "U"].copy()
+        counts = {"AA": len(aa), "AM": len(am), "NEW": len(new), "CALLBK": len(callbk), "DNC": len(dnc), "U": len(u)}
         for k, v in counts.items():
             print(f"{k} Records Found: {v}")
 
@@ -331,6 +332,13 @@ def process_list_file(input_file, out_base, exclude, fmt, valid_zips, preloaded=
             found = set(clean_phone_re(dnc["phone_number"]))
             new_dnc.update(found)
             print(f"Found {len(found)} DNC phones in this file")
+        if counts["U"] > 0:
+            frames["U"] = u.drop(columns=["status"])
+            frames["U"].to_csv(list_dir / f"{list_name}_U.csv", index=False, encoding="utf-8")
+            print(f"U (Underage) file saved: {list_name}_U.csv")
+            found_u = set(clean_phone_re(u["phone_number"]))
+            new_dnc.update(found_u)
+            print(f"Found {len(found_u)} Underage phones in this file")
 
         combined = pd.concat([normal.drop(columns=["status"]), aa.drop(columns=["status"]),
                               new.drop(columns=["status"])], ignore_index=True)
@@ -449,8 +457,8 @@ def run_re(a, out):
         jobs = [(f, None, None) for f in files]
 
     ok_n = fail_n = 0
-    totals = {"AA": 0, "AM": 0, "NEW": 0, "CALLBK": 0, "DNC": 0}
-    all_special = {"AM": [], "DNC": []}
+    totals = {"AA": 0, "AM": 0, "NEW": 0, "CALLBK": 0, "DNC": 0, "U": 0}
+    all_special = {"AM": [], "DNC": [], "U": []}
     all_new_dnc, ids = set(), []
     for f, preloaded, lname in jobs:
         ok, counts, frames, list_id, new_dnc = process_list_file(f, out, exclude, fmt, valid_zips,
@@ -466,7 +474,7 @@ def run_re(a, out):
         else:
             fail_n += 1
 
-    for k in ("AM", "DNC"):
+    for k in ("AM", "DNC", "U"):
         if all_special[k]:
             merged = pd.concat(all_special[k], ignore_index=True)
             merged.to_csv(out / f"ALL_{k}_RECORDS.csv", index=False, encoding="utf-8")
@@ -613,8 +621,8 @@ TOOLS = {
         ]),
     "re": dict(
         title="RE Pipeline",
-        desc="Processes list .txt files: filters statuses, separates AM, DNC and TX, removes duplicates, "
-             "validates ZIP codes and splits by state. New DNC numbers are saved in an updated DNC file.",
+        desc="Processes list .txt files: filters statuses, separates AM, DNC, U (Underage) and TX, removes duplicates, "
+             "validates ZIP codes and splits by state. New DNC and Underage numbers are saved in an updated DNC file.",
         fn=run_re,
         fields=[
             dict(name="lists", label="List files (.txt, select several)", kind="files", accept=".txt"),

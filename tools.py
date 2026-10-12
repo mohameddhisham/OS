@@ -16,10 +16,28 @@ import pandas as pd
 # Shared helpers
 # =====================================================================
 def read_file(file_path, **kwargs):
-    """Read CSV or Excel files."""
+    """Read CSV or Excel files with better error handling for corrupted Excel files."""
     extension = os.path.splitext(str(file_path))[1].lower()
     if extension in [".xlsx", ".xls", ".xlsm"]:
-        return pd.read_excel(file_path, **kwargs)
+        # Try multiple engines for better compatibility
+        engines = ["openpyxl", "xlrd"]
+        last_error = None
+        for engine in engines:
+            try:
+                return pd.read_excel(file_path, engine=engine, **kwargs)
+            except ImportError:
+                # Engine not installed, try next
+                continue
+            except Exception as e:
+                last_error = e
+                # Try next engine
+                continue
+        # If all engines failed, raise the last error with helpful message
+        raise ValueError(
+            f"Could not read Excel file: {file_path}\n"
+            f"Error: {type(last_error).__name__}: {last_error}\n"
+            f"TIP: The file may be corrupted. Try opening it in Excel and saving it again."
+        )
     for encoding in ["utf-8", "utf-8-sig", "cp1252", "ISO-8859-1"]:
         try:
             return pd.read_csv(file_path, encoding=encoding, low_memory=False, **kwargs)
@@ -29,10 +47,25 @@ def read_file(file_path, **kwargs):
 
 
 def load_table(file_path):
-    """Read .csv or .xlsx (used by the split tools)."""
+    """Read .csv or .xlsx (used by the split tools) with better error handling."""
     p = str(file_path).lower()
     if p.endswith(".xlsx"):
-        return pd.read_excel(file_path), "xlsx"
+        # Try multiple engines for better compatibility
+        engines = ["openpyxl", "xlrd"]
+        last_error = None
+        for engine in engines:
+            try:
+                return pd.read_excel(file_path, engine=engine), "xlsx"
+            except ImportError:
+                continue
+            except Exception as e:
+                last_error = e
+                continue
+        raise ValueError(
+            f"Could not read Excel file: {file_path}\n"
+            f"Error: {type(last_error).__name__}: {last_error}\n"
+            f"TIP: The file may be corrupted. Try opening it in Excel and saving it again."
+        )
     if p.endswith(".csv"):
         return pd.read_csv(file_path), "csv"
     raise ValueError("Unsupported file type. Only .csv and .xlsx are supported.")
@@ -90,7 +123,20 @@ def update_dnc_file(dnc_path, new_phones, out_path):
         # Update the original DNC file in place
         try:
             if is_excel(dnc_path):
-                updated.to_excel(dnc_path, index=False)
+                # Try multiple engines for better compatibility
+                engines = ["openpyxl", "xlrd"]
+                last_error = None
+                for engine in engines:
+                    try:
+                        updated.to_excel(dnc_path, index=False, engine=engine)
+                        break
+                    except ImportError:
+                        continue
+                    except Exception as e:
+                        last_error = e
+                        continue
+                else:
+                    raise last_error if last_error else Exception("No Excel engine available")
             else:
                 updated.to_csv(dnc_path, index=False)
             print(f"Original DNC file updated: {os.path.basename(str(dnc_path))} ({len(updated)} total records)")
@@ -100,7 +146,9 @@ def update_dnc_file(dnc_path, new_phones, out_path):
         updated.to_excel(out_path, index=False)
         print(f"Updated DNC file saved as DNC_updated.xlsx: {len(updated)} total records")
     except Exception as e:
-        print(f"Error updating DNC file: {e}")
+        print(f"Error updating DNC file: {type(e).__name__}: {e}")
+        print(f"  -> File path: {dnc_path}")
+        print(f"  -> TIP: The DNC file may be corrupted. Try opening it in Excel and saving it again.")
 
 
 def detect_encoding(path):
@@ -121,16 +169,49 @@ def is_excel(path):
 
 
 def table_header(path):
-    """Only the column names of a CSV/Excel file."""
+    """Only the column names of a CSV/Excel file with better error handling."""
     if is_excel(path):
-        return pd.read_excel(path, nrows=0, dtype=str)
+        # Try multiple engines for better compatibility
+        engines = ["openpyxl", "xlrd"]
+        last_error = None
+        for engine in engines:
+            try:
+                return pd.read_excel(path, nrows=0, dtype=str, engine=engine)
+            except ImportError:
+                continue
+            except Exception as e:
+                last_error = e
+                continue
+        raise ValueError(
+            f"Could not read Excel file header: {path}\n"
+            f"Error: {type(last_error).__name__}: {last_error}\n"
+            f"TIP: The file may be corrupted. Try opening it in Excel and saving it again."
+        )
     return pd.read_csv(path, nrows=0, dtype=str, encoding=detect_encoding(path))
 
 
 def iter_table(path, chunk_rows=CHUNK_ROWS):
     """Yield the file in pieces of text-only rows (CSV streams; Excel must be loaded once)."""
     if is_excel(path):
-        df = pd.read_excel(path, dtype=str)
+        # Try multiple engines for better compatibility
+        engines = ["openpyxl", "xlrd"]
+        last_error = None
+        df = None
+        for engine in engines:
+            try:
+                df = pd.read_excel(path, dtype=str, engine=engine)
+                break
+            except ImportError:
+                continue
+            except Exception as e:
+                last_error = e
+                continue
+        if df is None:
+            raise ValueError(
+                f"Could not read Excel file: {path}\n"
+                f"Error: {type(last_error).__name__}: {last_error}\n"
+                f"TIP: The file may be corrupted. Try opening it in Excel and saving it again."
+            )
         for i in range(0, len(df), chunk_rows):
             yield df.iloc[i:i + chunk_rows]
     else:
@@ -138,10 +219,28 @@ def iter_table(path, chunk_rows=CHUNK_ROWS):
 
 
 def read_phone_set(path):
-    """Cleaned phone numbers of a CSV/Excel file, reading ONLY the phone column."""
+    """Cleaned phone numbers of a CSV/Excel file, reading ONLY the phone column with better error handling."""
     col = find_phone_column(table_header(path))
     if is_excel(path):
-        df = pd.read_excel(path, usecols=[col], dtype=str)
+        # Try multiple engines for better compatibility
+        engines = ["openpyxl", "xlrd"]
+        last_error = None
+        df = None
+        for engine in engines:
+            try:
+                df = pd.read_excel(path, usecols=[col], dtype=str, engine=engine)
+                break
+            except ImportError:
+                continue
+            except Exception as e:
+                last_error = e
+                continue
+        if df is None:
+            raise ValueError(
+                f"Could not read Excel file: {path}\n"
+                f"Error: {type(last_error).__name__}: {last_error}\n"
+                f"TIP: The file may be corrupted. Try opening it in Excel and saving it again."
+            )
     else:
         df = pd.read_csv(path, usecols=[col], dtype=str, encoding=detect_encoding(path))
     return set(clean_phone_last10(df[col]).tolist())
@@ -157,22 +256,38 @@ def run_remove(a, out):
     new_dnc_phones = set()  # Track new DNC phones found in input file
 
     print(" -> Loading CRM...")
-    exclude.update(read_phone_set(a["crm"]))
+    try:
+        exclude.update(read_phone_set(a["crm"]))
+    except Exception as e:
+        print(f"  -> ERROR loading CRM: {type(e).__name__}: {e}")
+        raise
 
     print(" -> Loading Answer Machine TXT...")
-    am = pd.read_csv(a["am_txt"], header=None, names=["AM_PHONE"], dtype=str,
-                     encoding="ISO-8859-1", low_memory=False)
-    exclude.update(clean_phone_last10(am["AM_PHONE"]).tolist())
-    del am
+    try:
+        am = pd.read_csv(a["am_txt"], header=None, names=["AM_PHONE"], dtype=str,
+                         encoding="ISO-8859-1", low_memory=False)
+        exclude.update(clean_phone_last10(am["AM_PHONE"]).tolist())
+        del am
+    except Exception as e:
+        print(f"  -> ERROR loading Answer Machine TXT: {type(e).__name__}: {e}")
+        raise
 
     print(" -> Loading Answer Machine Excel...")
-    exclude.update(read_phone_set(a["am_excel"]))
+    try:
+        exclude.update(read_phone_set(a["am_excel"]))
+    except Exception as e:
+        print(f"  -> ERROR loading Answer Machine Excel: {type(e).__name__}: {e}")
+        raise
 
     print(" -> Loading DNC list...")
-    dnc_phones = read_phone_set(a["dnc"])
-    exclude.update(dnc_phones)
-    print(f" -> DNC numbers loaded: {len(dnc_phones):,}")
-    print(f" -> Total excluded numbers: {len(exclude):,}")
+    try:
+        dnc_phones = read_phone_set(a["dnc"])
+        exclude.update(dnc_phones)
+        print(f" -> DNC numbers loaded: {len(dnc_phones):,}")
+        print(f" -> Total excluded numbers: {len(exclude):,}")
+    except Exception as e:
+        print(f"  -> ERROR loading DNC list: {type(e).__name__}: {e}")
+        raise
 
     print(" -> Loading input file and removing matches (in chunks)...")
     header = table_header(a["order"])
@@ -393,29 +508,51 @@ def run_re(a, out):
 
     print("Loading reference data...")
     exclude = set()
-    crm = read_file(a["crm"], dtype=str)
-    crm_phone_col = find_phone_column(crm)
-    print(f"  -> Loaded CRM: {len(crm)} records (phone column: {crm_phone_col})")
-    exclude.update(clean_phone_re(crm[crm_phone_col]))
-    del crm
-    am_txt = pd.read_csv(a["am_txt"], header=None, names=["AM_PHONE"], dtype=str, low_memory=False)
-    print(f"  -> Loaded Answer Machine TXT: {len(am_txt)} records")
-    exclude.update(clean_phone_re(am_txt["AM_PHONE"]))
-    del am_txt
-    am_xl = pd.read_excel(a["am_excel"], dtype=str)
-    am_xl_phone_col = find_phone_column(am_xl)
-    print(f"  -> Loaded Answer Machine Excel: {len(am_xl)} records (phone column: {am_xl_phone_col})")
-    exclude.update(clean_phone_re(am_xl[am_xl_phone_col]))
-    del am_xl
     try:
-        dnc = pd.read_excel(a["dnc"], dtype=str)
+        crm = read_file(a["crm"], dtype=str)
+        crm_phone_col = find_phone_column(crm)
+        print(f"  -> Loaded CRM: {len(crm)} records (phone column: {crm_phone_col})")
+        exclude.update(clean_phone_re(crm[crm_phone_col]))
+        del crm
+    except Exception as e:
+        print(f"  -> ERROR loading CRM file: {type(e).__name__}: {e}")
+        print(f"  -> File path: {a['crm']}")
+        raise
+
+    try:
+        am_txt = pd.read_csv(a["am_txt"], header=None, names=["AM_PHONE"], dtype=str, low_memory=False)
+        print(f"  -> Loaded Answer Machine TXT: {len(am_txt)} records")
+        exclude.update(clean_phone_re(am_txt["AM_PHONE"]))
+        del am_txt
+    except Exception as e:
+        print(f"  -> ERROR loading Answer Machine TXT: {type(e).__name__}: {e}")
+        print(f"  -> File path: {a['am_txt']}")
+        raise
+
+    try:
+        am_xl = read_file(a["am_excel"], dtype=str)
+        am_xl_phone_col = find_phone_column(am_xl)
+        print(f"  -> Loaded Answer Machine Excel: {len(am_xl)} records (phone column: {am_xl_phone_col})")
+        exclude.update(clean_phone_re(am_xl[am_xl_phone_col]))
+        del am_xl
+    except Exception as e:
+        print(f"  -> ERROR loading Answer Machine Excel: {type(e).__name__}: {e}")
+        print(f"  -> File path: {a['am_excel']}")
+        print(f"  -> TIP: The Excel file may be corrupted. Try opening it in Excel and saving it again.")
+        raise
+
+    try:
+        dnc = read_file(a["dnc"], dtype=str)
         print(f"  -> Loaded DNC file: {len(dnc)} records")
         dnc_phones = clean_phone_re(dnc.iloc[:, 0])
         exclude.update(set(dnc_phones))
         print(f"  -> Added {len(dnc_phones)} DNC phones to exclusion set")
         del dnc
     except Exception as e:
-        print(f"  -> Error loading DNC file: {e}")
+        print(f"  -> ERROR loading DNC file: {type(e).__name__}: {e}")
+        print(f"  -> File path: {a['dnc']}")
+        print(f"  -> TIP: The Excel file may be corrupted. Try opening it in Excel and saving it again.")
+        raise
     print(f"Building exclusion phone set... total exclusion phones: {len(exclude)}")
 
     print("Loading valid ZIP codes...")

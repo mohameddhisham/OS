@@ -19,8 +19,13 @@ def read_file(file_path, **kwargs):
     """Read CSV or Excel files with better error handling for corrupted Excel files."""
     extension = os.path.splitext(str(file_path))[1].lower()
     if extension in [".xlsx", ".xls", ".xlsm"]:
-        # Try multiple engines for better compatibility
-        engines = ["openpyxl", "xlrd"]
+        # For .xls files, try xlrd first (better for old format)
+        # For .xlsx files, try openpyxl first (better for new format)
+        if extension == ".xls":
+            engines = ["xlrd", "openpyxl"]
+        else:
+            engines = ["openpyxl", "xlrd"]
+
         last_error = None
         for engine in engines:
             try:
@@ -36,7 +41,7 @@ def read_file(file_path, **kwargs):
         raise ValueError(
             f"Could not read Excel file: {file_path}\n"
             f"Error: {type(last_error).__name__}: {last_error}\n"
-            f"TIP: The file may be corrupted. Try opening it in Excel and saving it again."
+            f"TIP: The file may be corrupted. Try opening it in Excel and saving it as .xlsx format."
         )
     for encoding in ["utf-8", "utf-8-sig", "cp1252", "ISO-8859-1"]:
         try:
@@ -46,12 +51,68 @@ def read_file(file_path, **kwargs):
     raise ValueError(f"Could not read file: {file_path}")
 
 
+def read_file_flexible(file_path, **kwargs):
+    """Read a file by trying multiple formats regardless of extension.
+    Tries: CSV (multiple encodings), Excel (openpyxl, xlrd), Excel with different extensions.
+    Useful for files with wrong or missing extensions."""
+    path_str = str(file_path)
+    print(f"  -> Attempting to read file flexibly: {path_str}")
+
+    errors = []
+
+    # Try CSV with multiple encodings first
+    for encoding in ["utf-8", "utf-8-sig", "cp1252", "ISO-8859-1", "latin1"]:
+        try:
+            df = pd.read_csv(file_path, encoding=encoding, low_memory=False, **kwargs)
+            print(f"  -> Successfully read as CSV with encoding: {encoding}")
+            return df
+        except Exception as e:
+            errors.append(f"CSV ({encoding}): {type(e).__name__}: {e}")
+            continue
+
+    # Try Excel with openpyxl
+    try:
+        df = pd.read_excel(file_path, engine="openpyxl", **kwargs)
+        print(f"  -> Successfully read as Excel with openpyxl")
+        return df
+    except Exception as e:
+        errors.append(f"Excel (openpyxl): {type(e).__name__}: {e}")
+
+    # Try Excel with xlrd
+    try:
+        df = pd.read_excel(file_path, engine="xlrd", **kwargs)
+        print(f"  -> Successfully read as Excel with xlrd")
+        return df
+    except Exception as e:
+        errors.append(f"Excel (xlrd): {type(e).__name__}: {e}")
+
+    # Try Excel without specifying engine (let pandas decide)
+    try:
+        df = pd.read_excel(file_path, **kwargs)
+        print(f"  -> Successfully read as Excel (auto engine)")
+        return df
+    except Exception as e:
+        errors.append(f"Excel (auto): {type(e).__name__}: {e}")
+
+    # If all failed, raise with detailed error info
+    error_msg = f"Could not read file: {file_path}\n\nAttempted formats:\n"
+    for err in errors:
+        error_msg += f"  - {err}\n"
+    error_msg += "\nTIP: Try opening the file in Excel and saving it as .xlsx format."
+    raise ValueError(error_msg)
+
+
 def load_table(file_path):
     """Read .csv or .xlsx (used by the split tools) with better error handling."""
     p = str(file_path).lower()
-    if p.endswith(".xlsx"):
-        # Try multiple engines for better compatibility
-        engines = ["openpyxl", "xlrd"]
+    if p.endswith(".xlsx") or p.endswith(".xls"):
+        # For .xls files, try xlrd first (better for old format)
+        # For .xlsx files, try openpyxl first (better for new format)
+        if p.endswith(".xls"):
+            engines = ["xlrd", "openpyxl"]
+        else:
+            engines = ["openpyxl", "xlrd"]
+
         last_error = None
         for engine in engines:
             try:
@@ -64,7 +125,7 @@ def load_table(file_path):
         raise ValueError(
             f"Could not read Excel file: {file_path}\n"
             f"Error: {type(last_error).__name__}: {last_error}\n"
-            f"TIP: The file may be corrupted. Try opening it in Excel and saving it again."
+            f"TIP: The file may be corrupted. Try opening it in Excel and saving it as .xlsx format."
         )
     if p.endswith(".csv"):
         return pd.read_csv(file_path), "csv"
@@ -123,8 +184,14 @@ def update_dnc_file(dnc_path, new_phones, out_path):
         # Update the original DNC file in place
         try:
             if is_excel(dnc_path):
-                # Try multiple engines for better compatibility
-                engines = ["openpyxl", "xlrd"]
+                extension = os.path.splitext(str(dnc_path))[1].lower()
+                # For .xls files, try xlrd first (better for old format)
+                # For .xlsx files, try openpyxl first (better for new format)
+                if extension == ".xls":
+                    engines = ["xlrd", "openpyxl"]
+                else:
+                    engines = ["openpyxl", "xlrd"]
+
                 last_error = None
                 for engine in engines:
                     try:
@@ -171,8 +238,14 @@ def is_excel(path):
 def table_header(path):
     """Only the column names of a CSV/Excel file with better error handling."""
     if is_excel(path):
-        # Try multiple engines for better compatibility
-        engines = ["openpyxl", "xlrd"]
+        extension = os.path.splitext(str(path))[1].lower()
+        # For .xls files, try xlrd first (better for old format)
+        # For .xlsx files, try openpyxl first (better for new format)
+        if extension == ".xls":
+            engines = ["xlrd", "openpyxl"]
+        else:
+            engines = ["openpyxl", "xlrd"]
+
         last_error = None
         for engine in engines:
             try:
@@ -185,7 +258,7 @@ def table_header(path):
         raise ValueError(
             f"Could not read Excel file header: {path}\n"
             f"Error: {type(last_error).__name__}: {last_error}\n"
-            f"TIP: The file may be corrupted. Try opening it in Excel and saving it again."
+            f"TIP: The file may be corrupted. Try opening it in Excel and saving it as .xlsx format."
         )
     return pd.read_csv(path, nrows=0, dtype=str, encoding=detect_encoding(path))
 
@@ -193,8 +266,14 @@ def table_header(path):
 def iter_table(path, chunk_rows=CHUNK_ROWS):
     """Yield the file in pieces of text-only rows (CSV streams; Excel must be loaded once)."""
     if is_excel(path):
-        # Try multiple engines for better compatibility
-        engines = ["openpyxl", "xlrd"]
+        extension = os.path.splitext(str(path))[1].lower()
+        # For .xls files, try xlrd first (better for old format)
+        # For .xlsx files, try openpyxl first (better for new format)
+        if extension == ".xls":
+            engines = ["xlrd", "openpyxl"]
+        else:
+            engines = ["openpyxl", "xlrd"]
+
         last_error = None
         df = None
         for engine in engines:
@@ -210,7 +289,7 @@ def iter_table(path, chunk_rows=CHUNK_ROWS):
             raise ValueError(
                 f"Could not read Excel file: {path}\n"
                 f"Error: {type(last_error).__name__}: {last_error}\n"
-                f"TIP: The file may be corrupted. Try opening it in Excel and saving it again."
+                f"TIP: The file may be corrupted. Try opening it in Excel and saving it as .xlsx format."
             )
         for i in range(0, len(df), chunk_rows):
             yield df.iloc[i:i + chunk_rows]
@@ -222,8 +301,14 @@ def read_phone_set(path):
     """Cleaned phone numbers of a CSV/Excel file, reading ONLY the phone column with better error handling."""
     col = find_phone_column(table_header(path))
     if is_excel(path):
-        # Try multiple engines for better compatibility
-        engines = ["openpyxl", "xlrd"]
+        extension = os.path.splitext(str(path))[1].lower()
+        # For .xls files, try xlrd first (better for old format)
+        # For .xlsx files, try openpyxl first (better for new format)
+        if extension == ".xls":
+            engines = ["xlrd", "openpyxl"]
+        else:
+            engines = ["openpyxl", "xlrd"]
+
         last_error = None
         df = None
         for engine in engines:
@@ -239,7 +324,7 @@ def read_phone_set(path):
             raise ValueError(
                 f"Could not read Excel file: {path}\n"
                 f"Error: {type(last_error).__name__}: {last_error}\n"
-                f"TIP: The file may be corrupted. Try opening it in Excel and saving it again."
+                f"TIP: The file may be corrupted. Try opening it in Excel and saving it as .xlsx format."
             )
     else:
         df = pd.read_csv(path, usecols=[col], dtype=str, encoding=detect_encoding(path))
@@ -257,10 +342,15 @@ def run_remove(a, out):
 
     print(" -> Loading CRM...")
     try:
-        exclude.update(read_phone_set(a["crm"]))
+        crm = read_file_flexible(a["crm"], dtype=str)
+        crm_phone_col = find_phone_column(crm)
+        exclude.update(clean_phone_last10(crm[crm_phone_col]))
+        del crm
     except Exception as e:
         print(f"  -> ERROR loading CRM: {type(e).__name__}: {e}")
-        raise
+        print(f"  -> WARNING: Continuing without CRM filtering. This may result in more duplicates in output.")
+        print(f"  -> To fix: Open the file in Excel and save it as .xlsx format, then try again.")
+        # Don't raise - continue without CRM filtering
 
     print(" -> Loading Answer Machine TXT...")
     try:
@@ -509,7 +599,7 @@ def run_re(a, out):
     print("Loading reference data...")
     exclude = set()
     try:
-        crm = read_file(a["crm"], dtype=str)
+        crm = read_file_flexible(a["crm"], dtype=str)
         crm_phone_col = find_phone_column(crm)
         print(f"  -> Loaded CRM: {len(crm)} records (phone column: {crm_phone_col})")
         exclude.update(clean_phone_re(crm[crm_phone_col]))
@@ -517,7 +607,9 @@ def run_re(a, out):
     except Exception as e:
         print(f"  -> ERROR loading CRM file: {type(e).__name__}: {e}")
         print(f"  -> File path: {a['crm']}")
-        raise
+        print(f"  -> WARNING: Continuing without CRM filtering. This may result in more duplicates in output.")
+        print(f"  -> To fix: Open the file in Excel and save it as .xlsx format, then try again.")
+        # Don't raise - continue without CRM filtering
 
     try:
         am_txt = pd.read_csv(a["am_txt"], header=None, names=["AM_PHONE"], dtype=str, low_memory=False)

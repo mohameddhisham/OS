@@ -19,8 +19,13 @@ def read_file(file_path, **kwargs):
     """Read CSV or Excel files with better error handling for corrupted Excel files."""
     extension = os.path.splitext(str(file_path))[1].lower()
     if extension in [".xlsx", ".xls", ".xlsm"]:
-        # Try multiple engines for better compatibility
-        engines = ["openpyxl", "xlrd"]
+        # For .xls files, try xlrd first (better for old format)
+        # For .xlsx files, try openpyxl first (better for new format)
+        if extension == ".xls":
+            engines = ["xlrd", "openpyxl"]
+        else:
+            engines = ["openpyxl", "xlrd"]
+
         last_error = None
         for engine in engines:
             try:
@@ -36,7 +41,7 @@ def read_file(file_path, **kwargs):
         raise ValueError(
             f"Could not read Excel file: {file_path}\n"
             f"Error: {type(last_error).__name__}: {last_error}\n"
-            f"TIP: The file may be corrupted. Try opening it in Excel and saving it again."
+            f"TIP: The file may be corrupted. Try opening it in Excel and saving it as .xlsx format."
         )
     for encoding in ["utf-8", "utf-8-sig", "cp1252", "ISO-8859-1"]:
         try:
@@ -46,12 +51,68 @@ def read_file(file_path, **kwargs):
     raise ValueError(f"Could not read file: {file_path}")
 
 
+def read_file_flexible(file_path, **kwargs):
+    """Read a file by trying multiple formats regardless of extension.
+    Tries: CSV (multiple encodings), Excel (openpyxl, xlrd), Excel with different extensions.
+    Useful for files with wrong or missing extensions."""
+    path_str = str(file_path)
+    print(f"  -> Attempting to read file flexibly: {path_str}")
+
+    errors = []
+
+    # Try CSV with multiple encodings first
+    for encoding in ["utf-8", "utf-8-sig", "cp1252", "ISO-8859-1", "latin1"]:
+        try:
+            df = pd.read_csv(file_path, encoding=encoding, low_memory=False, **kwargs)
+            print(f"  -> Successfully read as CSV with encoding: {encoding}")
+            return df
+        except Exception as e:
+            errors.append(f"CSV ({encoding}): {type(e).__name__}: {e}")
+            continue
+
+    # Try Excel with openpyxl
+    try:
+        df = pd.read_excel(file_path, engine="openpyxl", **kwargs)
+        print(f"  -> Successfully read as Excel with openpyxl")
+        return df
+    except Exception as e:
+        errors.append(f"Excel (openpyxl): {type(e).__name__}: {e}")
+
+    # Try Excel with xlrd
+    try:
+        df = pd.read_excel(file_path, engine="xlrd", **kwargs)
+        print(f"  -> Successfully read as Excel with xlrd")
+        return df
+    except Exception as e:
+        errors.append(f"Excel (xlrd): {type(e).__name__}: {e}")
+
+    # Try Excel without specifying engine (let pandas decide)
+    try:
+        df = pd.read_excel(file_path, **kwargs)
+        print(f"  -> Successfully read as Excel (auto engine)")
+        return df
+    except Exception as e:
+        errors.append(f"Excel (auto): {type(e).__name__}: {e}")
+
+    # If all failed, raise with detailed error info
+    error_msg = f"Could not read file: {file_path}\n\nAttempted formats:\n"
+    for err in errors:
+        error_msg += f"  - {err}\n"
+    error_msg += "\nTIP: Try opening the file in Excel and saving it as .xlsx format."
+    raise ValueError(error_msg)
+
+
 def load_table(file_path):
     """Read .csv or .xlsx (used by the split tools) with better error handling."""
     p = str(file_path).lower()
-    if p.endswith(".xlsx"):
-        # Try multiple engines for better compatibility
-        engines = ["openpyxl", "xlrd"]
+    if p.endswith(".xlsx") or p.endswith(".xls"):
+        # For .xls files, try xlrd first (better for old format)
+        # For .xlsx files, try openpyxl first (better for new format)
+        if p.endswith(".xls"):
+            engines = ["xlrd", "openpyxl"]
+        else:
+            engines = ["openpyxl", "xlrd"]
+
         last_error = None
         for engine in engines:
             try:
@@ -64,7 +125,7 @@ def load_table(file_path):
         raise ValueError(
             f"Could not read Excel file: {file_path}\n"
             f"Error: {type(last_error).__name__}: {last_error}\n"
-            f"TIP: The file may be corrupted. Try opening it in Excel and saving it again."
+            f"TIP: The file may be corrupted. Try opening it in Excel and saving it as .xlsx format."
         )
     if p.endswith(".csv"):
         return pd.read_csv(file_path), "csv"
@@ -123,8 +184,14 @@ def update_dnc_file(dnc_path, new_phones, out_path):
         # Update the original DNC file in place
         try:
             if is_excel(dnc_path):
-                # Try multiple engines for better compatibility
-                engines = ["openpyxl", "xlrd"]
+                extension = os.path.splitext(str(dnc_path))[1].lower()
+                # For .xls files, try xlrd first (better for old format)
+                # For .xlsx files, try openpyxl first (better for new format)
+                if extension == ".xls":
+                    engines = ["xlrd", "openpyxl"]
+                else:
+                    engines = ["openpyxl", "xlrd"]
+
                 last_error = None
                 for engine in engines:
                     try:
@@ -171,8 +238,14 @@ def is_excel(path):
 def table_header(path):
     """Only the column names of a CSV/Excel file with better error handling."""
     if is_excel(path):
-        # Try multiple engines for better compatibility
-        engines = ["openpyxl", "xlrd"]
+        extension = os.path.splitext(str(path))[1].lower()
+        # For .xls files, try xlrd first (better for old format)
+        # For .xlsx files, try openpyxl first (better for new format)
+        if extension == ".xls":
+            engines = ["xlrd", "openpyxl"]
+        else:
+            engines = ["openpyxl", "xlrd"]
+
         last_error = None
         for engine in engines:
             try:
@@ -185,7 +258,7 @@ def table_header(path):
         raise ValueError(
             f"Could not read Excel file header: {path}\n"
             f"Error: {type(last_error).__name__}: {last_error}\n"
-            f"TIP: The file may be corrupted. Try opening it in Excel and saving it again."
+            f"TIP: The file may be corrupted. Try opening it in Excel and saving it as .xlsx format."
         )
     return pd.read_csv(path, nrows=0, dtype=str, encoding=detect_encoding(path))
 
@@ -193,8 +266,14 @@ def table_header(path):
 def iter_table(path, chunk_rows=CHUNK_ROWS):
     """Yield the file in pieces of text-only rows (CSV streams; Excel must be loaded once)."""
     if is_excel(path):
-        # Try multiple engines for better compatibility
-        engines = ["openpyxl", "xlrd"]
+        extension = os.path.splitext(str(path))[1].lower()
+        # For .xls files, try xlrd first (better for old format)
+        # For .xlsx files, try openpyxl first (better for new format)
+        if extension == ".xls":
+            engines = ["xlrd", "openpyxl"]
+        else:
+            engines = ["openpyxl", "xlrd"]
+
         last_error = None
         df = None
         for engine in engines:
@@ -210,7 +289,7 @@ def iter_table(path, chunk_rows=CHUNK_ROWS):
             raise ValueError(
                 f"Could not read Excel file: {path}\n"
                 f"Error: {type(last_error).__name__}: {last_error}\n"
-                f"TIP: The file may be corrupted. Try opening it in Excel and saving it again."
+                f"TIP: The file may be corrupted. Try opening it in Excel and saving it as .xlsx format."
             )
         for i in range(0, len(df), chunk_rows):
             yield df.iloc[i:i + chunk_rows]
@@ -222,8 +301,14 @@ def read_phone_set(path):
     """Cleaned phone numbers of a CSV/Excel file, reading ONLY the phone column with better error handling."""
     col = find_phone_column(table_header(path))
     if is_excel(path):
-        # Try multiple engines for better compatibility
-        engines = ["openpyxl", "xlrd"]
+        extension = os.path.splitext(str(path))[1].lower()
+        # For .xls files, try xlrd first (better for old format)
+        # For .xlsx files, try openpyxl first (better for new format)
+        if extension == ".xls":
+            engines = ["xlrd", "openpyxl"]
+        else:
+            engines = ["openpyxl", "xlrd"]
+
         last_error = None
         df = None
         for engine in engines:
@@ -239,7 +324,7 @@ def read_phone_set(path):
             raise ValueError(
                 f"Could not read Excel file: {path}\n"
                 f"Error: {type(last_error).__name__}: {last_error}\n"
-                f"TIP: The file may be corrupted. Try opening it in Excel and saving it again."
+                f"TIP: The file may be corrupted. Try opening it in Excel and saving it as .xlsx format."
             )
     else:
         df = pd.read_csv(path, usecols=[col], dtype=str, encoding=detect_encoding(path))
@@ -257,10 +342,15 @@ def run_remove(a, out):
 
     print(" -> Loading CRM...")
     try:
-        exclude.update(read_phone_set(a["crm"]))
+        crm = read_file_flexible(a["crm"], dtype=str)
+        crm_phone_col = find_phone_column(crm)
+        exclude.update(clean_phone_last10(crm[crm_phone_col]))
+        del crm
     except Exception as e:
         print(f"  -> ERROR loading CRM: {type(e).__name__}: {e}")
-        raise
+        print(f"  -> WARNING: Continuing without CRM filtering. This may result in more duplicates in output.")
+        print(f"  -> To fix: Open the file in Excel and save it as .xlsx format, then try again.")
+        # Don't raise - continue without CRM filtering
 
     print(" -> Loading Answer Machine TXT...")
     try:
@@ -382,6 +472,96 @@ def split_by_state(df, split_dir, list_name, fmt):
         print(f"  -> {state}: {len(part)} records")
 
 
+def select_output_columns(df):
+    """Select and normalize to the required output columns:
+    phone_number, first_name, last_name, address1, city, state"""
+    # Create column mapping (case-insensitive)
+    col_map = {str(c).strip().lower(): c for c in df.columns}
+
+    # Define required columns and their possible names
+    column_mappings = {
+        "phone_number": ["phone_number", "phone", "phone number", "telephone", "tel", "mobile", "mobile_phone"],
+        "first_name": ["first_name", "first name", "fname", "first", "given_name"],
+        "last_name": ["last_name", "last name", "lname", "last", "surname", "family_name"],
+        "address1": ["address1", "address", "address_1", "street", "street_address", "addr1"],
+        "city": ["city"],
+        "state": ["state", "st"]
+    }
+
+    # Find the actual column names
+    output_cols = {}
+    missing_cols = []
+
+    for target_name, possible_names in column_mappings.items():
+        found = None
+        for possible in possible_names:
+            if possible in col_map:
+                found = col_map[possible]
+                break
+        if found:
+            output_cols[target_name] = found
+        else:
+            missing_cols.append(target_name)
+
+    if missing_cols:
+        print(f"  -> WARNING: Missing required columns: {', '.join(missing_cols)}")
+        print(f"  -> Available columns: {', '.join(df.columns)}")
+
+    # Select the columns with renamed headers
+    if output_cols:
+        result = df[list(output_cols.values())].copy()
+        result.columns = list(output_cols.keys())
+        return result
+    else:
+        print("  -> ERROR: Could not find any required columns. Returning original data.")
+        return df
+
+
+def select_output_columns(df):
+    """Select and normalize to the required output columns:
+    phone_number, first_name, last_name, address1, city, state"""
+    # Create column mapping (case-insensitive)
+    col_map = {str(c).strip().lower(): c for c in df.columns}
+
+    # Define required columns and their possible names
+    column_mappings = {
+        "phone_number": ["phone_number", "phone", "phone number", "telephone", "tel", "mobile", "mobile_phone"],
+        "first_name": ["first_name", "first name", "fname", "first", "given_name"],
+        "last_name": ["last_name", "last name", "lname", "last", "surname", "family_name"],
+        "address1": ["address1", "address", "address_1", "street", "street_address", "addr1"],
+        "city": ["city"],
+        "state": ["state", "st"]
+    }
+
+    # Find the actual column names
+    output_cols = {}
+    missing_cols = []
+
+    for target_name, possible_names in column_mappings.items():
+        found = None
+        for possible in possible_names:
+            if possible in col_map:
+                found = col_map[possible]
+                break
+        if found:
+            output_cols[target_name] = found
+        else:
+            missing_cols.append(target_name)
+
+    if missing_cols:
+        print(f"  -> WARNING: Missing required columns: {', '.join(missing_cols)}")
+        print(f"  -> Available columns: {', '.join(df.columns)}")
+
+    # Select the columns with renamed headers
+    if output_cols:
+        result = df[list(output_cols.values())].copy()
+        result.columns = list(output_cols.keys())
+        return result
+    else:
+        print("  -> ERROR: Could not find any required columns. Returning original data.")
+        return df
+
+
 def process_list_file(input_file, out_base, exclude, fmt, valid_zips, preloaded=None, list_name=None):
     file_name = os.path.basename(input_file) if input_file is not None else "combined_lists"
     list_name = list_name or extract_list_id(file_name)
@@ -437,19 +617,22 @@ def process_list_file(input_file, out_base, exclude, fmt, valid_zips, preloaded=
 
         frames = {}
         if counts["AM"] > 0:
-            frames["AM"] = am.drop(columns=["status"])
-            frames["AM"].to_csv(list_dir / f"{list_name}_AM.csv", index=False, encoding="utf-8")
+            am_output = select_output_columns(am.drop(columns=["status"]))
+            frames["AM"] = am_output
+            am_output.to_csv(list_dir / f"{list_name}_AM.csv", index=False, encoding="utf-8")
             print(f"AM file saved: {list_name}_AM.csv")
         if counts["DNC"] > 0:
-            frames["DNC"] = dnc.drop(columns=["status"])
-            frames["DNC"].to_csv(list_dir / f"{list_name}_DNC.csv", index=False, encoding="utf-8")
+            dnc_output = select_output_columns(dnc.drop(columns=["status"]))
+            frames["DNC"] = dnc_output
+            dnc_output.to_csv(list_dir / f"{list_name}_DNC.csv", index=False, encoding="utf-8")
             print(f"DNC file saved: {list_name}_DNC.csv")
             found = set(clean_phone_re(dnc["phone_number"]))
             new_dnc.update(found)
             print(f"Found {len(found)} DNC phones in this file")
         if counts["U"] > 0:
-            frames["U"] = u.drop(columns=["status"])
-            frames["U"].to_csv(list_dir / f"{list_name}_U.csv", index=False, encoding="utf-8")
+            u_output = select_output_columns(u.drop(columns=["status"]))
+            frames["U"] = u_output
+            u_output.to_csv(list_dir / f"{list_name}_U.csv", index=False, encoding="utf-8")
             print(f"U (Underage) file saved: {list_name}_U.csv")
             found_u = set(clean_phone_re(u["phone_number"]))
             new_dnc.update(found_u)
@@ -462,13 +645,14 @@ def process_list_file(input_file, out_base, exclude, fmt, valid_zips, preloaded=
         print(f"Total records before TX removal: {len(combined)}")
         print(f"TX records removed: {len(tx)}")
         print(f"Records after TX removal: {len(no_tx)}")
+
+        # Save TX file with selected columns
         if not tx.empty:
-            tx.to_csv(list_dir / f"{list_name}_TX.csv", index=False, encoding="utf-8")
+            tx_output = select_output_columns(tx)
+            tx_output.to_csv(list_dir / f"{list_name}_TX.csv", index=False, encoding="utf-8")
             print(f"Saved TX records to: {list_name}_TX.csv")
 
-        no_tx.to_csv(list_dir / f"{list_name}.csv", index=False, encoding="utf-8")
-        print(f"Saved original data (normal + AA + NEW, no TX): {len(no_tx)} records")
-
+        # Deduplication (needs phone_number column - use full no_tx data)
         no_tx["clean_phone"] = clean_phone_re(no_tx["phone_number"])
         is_dup = no_tx["clean_phone"].isin(exclude)
         is_short = no_tx["clean_phone"].str.len() < 10
@@ -477,21 +661,31 @@ def process_list_file(input_file, out_base, exclude, fmt, valid_zips, preloaded=
         print(f"Filtered data (before ZIP validation): {len(filtered)} records")
         print(f"Removed as duplicate/fake/DNC: {len(dup)} records (NOT SAVED)")
 
+        # Save original data with selected columns (from no_tx - includes duplicates)
+        no_tx_output = select_output_columns(no_tx)
+        no_tx_output.to_csv(list_dir / f"{list_name}.csv", index=False, encoding="utf-8")
+        print(f"Saved original data (normal + AA + NEW, no TX): {len(no_tx_output)} records")
+
         if valid_zips and not filtered.empty:
             print("Validating ZIP codes...")
             zip_clean = filtered["postal_code"].astype(str).str.strip()
             ok = zip_clean.isin(valid_zips)
             invalid = filtered[~ok]
-            invalid.to_csv(list_dir / f"{list_name}_nodup.csv", index=False, encoding="utf-8")
-            print(f"Saved invalid ZIP records: {len(invalid)} records to {list_name}_nodup.csv")
+            # Select required columns for invalid ZIP file
+            invalid_output = select_output_columns(invalid)
+            invalid_output.to_csv(list_dir / f"{list_name}_nodup.csv", index=False, encoding="utf-8")
+            print(f"Saved invalid ZIP records: {len(invalid_output)} records to {list_name}_nodup.csv")
             filtered = filtered[ok].copy()
             print(f"Valid ZIP records for processing: {len(filtered)} records")
 
-        filtered.to_csv(list_dir / f"{list_name}_filtersZIP.csv", index=False, encoding="utf-8")
-        print(f"Saved filtersZIP data (AA + NEW + normal, valid ZIP, no TX, no DNC): {len(filtered)} records")
+        # Select only required columns for final output
+        print("Selecting required columns for final output...")
+        filtered_output = select_output_columns(filtered)
+        filtered_output.to_csv(list_dir / f"{list_name}_filtersZIP.csv", index=False, encoding="utf-8")
+        print(f"Saved filtersZIP data (AA + NEW + normal, valid ZIP, no TX, no DNC): {len(filtered_output)} records")
 
-        if not filtered.empty:
-            split_by_state(filtered, split_dir, list_name, fmt)
+        if not filtered_output.empty:
+            split_by_state(filtered_output, split_dir, list_name, fmt)
         else:
             print("No data to split by state.")
     except Exception as e:  # keep going with the other list files
@@ -509,7 +703,7 @@ def run_re(a, out):
     print("Loading reference data...")
     exclude = set()
     try:
-        crm = read_file(a["crm"], dtype=str)
+        crm = read_file_flexible(a["crm"], dtype=str)
         crm_phone_col = find_phone_column(crm)
         print(f"  -> Loaded CRM: {len(crm)} records (phone column: {crm_phone_col})")
         exclude.update(clean_phone_re(crm[crm_phone_col]))
@@ -517,7 +711,9 @@ def run_re(a, out):
     except Exception as e:
         print(f"  -> ERROR loading CRM file: {type(e).__name__}: {e}")
         print(f"  -> File path: {a['crm']}")
-        raise
+        print(f"  -> WARNING: Continuing without CRM filtering. This may result in more duplicates in output.")
+        print(f"  -> To fix: Open the file in Excel and save it as .xlsx format, then try again.")
+        # Don't raise - continue without CRM filtering
 
     try:
         am_txt = pd.read_csv(a["am_txt"], header=None, names=["AM_PHONE"], dtype=str, low_memory=False)

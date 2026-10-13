@@ -472,6 +472,96 @@ def split_by_state(df, split_dir, list_name, fmt):
         print(f"  -> {state}: {len(part)} records")
 
 
+def select_output_columns(df):
+    """Select and normalize to the required output columns:
+    phone_number, first_name, last_name, address1, city, state"""
+    # Create column mapping (case-insensitive)
+    col_map = {str(c).strip().lower(): c for c in df.columns}
+
+    # Define required columns and their possible names
+    column_mappings = {
+        "phone_number": ["phone_number", "phone", "phone number", "telephone", "tel", "mobile", "mobile_phone"],
+        "first_name": ["first_name", "first name", "fname", "first", "given_name"],
+        "last_name": ["last_name", "last name", "lname", "last", "surname", "family_name"],
+        "address1": ["address1", "address", "address_1", "street", "street_address", "addr1"],
+        "city": ["city"],
+        "state": ["state", "st"]
+    }
+
+    # Find the actual column names
+    output_cols = {}
+    missing_cols = []
+
+    for target_name, possible_names in column_mappings.items():
+        found = None
+        for possible in possible_names:
+            if possible in col_map:
+                found = col_map[possible]
+                break
+        if found:
+            output_cols[target_name] = found
+        else:
+            missing_cols.append(target_name)
+
+    if missing_cols:
+        print(f"  -> WARNING: Missing required columns: {', '.join(missing_cols)}")
+        print(f"  -> Available columns: {', '.join(df.columns)}")
+
+    # Select the columns with renamed headers
+    if output_cols:
+        result = df[list(output_cols.values())].copy()
+        result.columns = list(output_cols.keys())
+        return result
+    else:
+        print("  -> ERROR: Could not find any required columns. Returning original data.")
+        return df
+
+
+def select_output_columns(df):
+    """Select and normalize to the required output columns:
+    phone_number, first_name, last_name, address1, city, state"""
+    # Create column mapping (case-insensitive)
+    col_map = {str(c).strip().lower(): c for c in df.columns}
+
+    # Define required columns and their possible names
+    column_mappings = {
+        "phone_number": ["phone_number", "phone", "phone number", "telephone", "tel", "mobile", "mobile_phone"],
+        "first_name": ["first_name", "first name", "fname", "first", "given_name"],
+        "last_name": ["last_name", "last name", "lname", "last", "surname", "family_name"],
+        "address1": ["address1", "address", "address_1", "street", "street_address", "addr1"],
+        "city": ["city"],
+        "state": ["state", "st"]
+    }
+
+    # Find the actual column names
+    output_cols = {}
+    missing_cols = []
+
+    for target_name, possible_names in column_mappings.items():
+        found = None
+        for possible in possible_names:
+            if possible in col_map:
+                found = col_map[possible]
+                break
+        if found:
+            output_cols[target_name] = found
+        else:
+            missing_cols.append(target_name)
+
+    if missing_cols:
+        print(f"  -> WARNING: Missing required columns: {', '.join(missing_cols)}")
+        print(f"  -> Available columns: {', '.join(df.columns)}")
+
+    # Select the columns with renamed headers
+    if output_cols:
+        result = df[list(output_cols.values())].copy()
+        result.columns = list(output_cols.keys())
+        return result
+    else:
+        print("  -> ERROR: Could not find any required columns. Returning original data.")
+        return df
+
+
 def process_list_file(input_file, out_base, exclude, fmt, valid_zips, preloaded=None, list_name=None):
     file_name = os.path.basename(input_file) if input_file is not None else "combined_lists"
     list_name = list_name or extract_list_id(file_name)
@@ -527,19 +617,22 @@ def process_list_file(input_file, out_base, exclude, fmt, valid_zips, preloaded=
 
         frames = {}
         if counts["AM"] > 0:
-            frames["AM"] = am.drop(columns=["status"])
-            frames["AM"].to_csv(list_dir / f"{list_name}_AM.csv", index=False, encoding="utf-8")
+            am_output = select_output_columns(am.drop(columns=["status"]))
+            frames["AM"] = am_output
+            am_output.to_csv(list_dir / f"{list_name}_AM.csv", index=False, encoding="utf-8")
             print(f"AM file saved: {list_name}_AM.csv")
         if counts["DNC"] > 0:
-            frames["DNC"] = dnc.drop(columns=["status"])
-            frames["DNC"].to_csv(list_dir / f"{list_name}_DNC.csv", index=False, encoding="utf-8")
+            dnc_output = select_output_columns(dnc.drop(columns=["status"]))
+            frames["DNC"] = dnc_output
+            dnc_output.to_csv(list_dir / f"{list_name}_DNC.csv", index=False, encoding="utf-8")
             print(f"DNC file saved: {list_name}_DNC.csv")
             found = set(clean_phone_re(dnc["phone_number"]))
             new_dnc.update(found)
             print(f"Found {len(found)} DNC phones in this file")
         if counts["U"] > 0:
-            frames["U"] = u.drop(columns=["status"])
-            frames["U"].to_csv(list_dir / f"{list_name}_U.csv", index=False, encoding="utf-8")
+            u_output = select_output_columns(u.drop(columns=["status"]))
+            frames["U"] = u_output
+            u_output.to_csv(list_dir / f"{list_name}_U.csv", index=False, encoding="utf-8")
             print(f"U (Underage) file saved: {list_name}_U.csv")
             found_u = set(clean_phone_re(u["phone_number"]))
             new_dnc.update(found_u)
@@ -552,13 +645,14 @@ def process_list_file(input_file, out_base, exclude, fmt, valid_zips, preloaded=
         print(f"Total records before TX removal: {len(combined)}")
         print(f"TX records removed: {len(tx)}")
         print(f"Records after TX removal: {len(no_tx)}")
+
+        # Save TX file with selected columns
         if not tx.empty:
-            tx.to_csv(list_dir / f"{list_name}_TX.csv", index=False, encoding="utf-8")
+            tx_output = select_output_columns(tx)
+            tx_output.to_csv(list_dir / f"{list_name}_TX.csv", index=False, encoding="utf-8")
             print(f"Saved TX records to: {list_name}_TX.csv")
 
-        no_tx.to_csv(list_dir / f"{list_name}.csv", index=False, encoding="utf-8")
-        print(f"Saved original data (normal + AA + NEW, no TX): {len(no_tx)} records")
-
+        # Deduplication (needs phone_number column - use full no_tx data)
         no_tx["clean_phone"] = clean_phone_re(no_tx["phone_number"])
         is_dup = no_tx["clean_phone"].isin(exclude)
         is_short = no_tx["clean_phone"].str.len() < 10
@@ -567,21 +661,31 @@ def process_list_file(input_file, out_base, exclude, fmt, valid_zips, preloaded=
         print(f"Filtered data (before ZIP validation): {len(filtered)} records")
         print(f"Removed as duplicate/fake/DNC: {len(dup)} records (NOT SAVED)")
 
+        # Save original data with selected columns (from no_tx - includes duplicates)
+        no_tx_output = select_output_columns(no_tx)
+        no_tx_output.to_csv(list_dir / f"{list_name}.csv", index=False, encoding="utf-8")
+        print(f"Saved original data (normal + AA + NEW, no TX): {len(no_tx_output)} records")
+
         if valid_zips and not filtered.empty:
             print("Validating ZIP codes...")
             zip_clean = filtered["postal_code"].astype(str).str.strip()
             ok = zip_clean.isin(valid_zips)
             invalid = filtered[~ok]
-            invalid.to_csv(list_dir / f"{list_name}_nodup.csv", index=False, encoding="utf-8")
-            print(f"Saved invalid ZIP records: {len(invalid)} records to {list_name}_nodup.csv")
+            # Select required columns for invalid ZIP file
+            invalid_output = select_output_columns(invalid)
+            invalid_output.to_csv(list_dir / f"{list_name}_nodup.csv", index=False, encoding="utf-8")
+            print(f"Saved invalid ZIP records: {len(invalid_output)} records to {list_name}_nodup.csv")
             filtered = filtered[ok].copy()
             print(f"Valid ZIP records for processing: {len(filtered)} records")
 
-        filtered.to_csv(list_dir / f"{list_name}_filtersZIP.csv", index=False, encoding="utf-8")
-        print(f"Saved filtersZIP data (AA + NEW + normal, valid ZIP, no TX, no DNC): {len(filtered)} records")
+        # Select only required columns for final output
+        print("Selecting required columns for final output...")
+        filtered_output = select_output_columns(filtered)
+        filtered_output.to_csv(list_dir / f"{list_name}_filtersZIP.csv", index=False, encoding="utf-8")
+        print(f"Saved filtersZIP data (AA + NEW + normal, valid ZIP, no TX, no DNC): {len(filtered_output)} records")
 
-        if not filtered.empty:
-            split_by_state(filtered, split_dir, list_name, fmt)
+        if not filtered_output.empty:
+            split_by_state(filtered_output, split_dir, list_name, fmt)
         else:
             print("No data to split by state.")
     except Exception as e:  # keep going with the other list files

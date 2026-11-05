@@ -186,11 +186,21 @@ def clean_crm(file_bytes):
 
 
 # ==================== Database Helpers ====================
-def connect(host, port, user, password, database):
-    return psycopg2.connect(
-        host=host, port=int(port), dbname=database, user=user,
-        password=password, connect_timeout=10,
-    )
+def connect(host, port, user, password, database, max_retries=3):
+    """Connect to PostgreSQL with retry logic and extended timeout."""
+    import time
+    
+    for attempt in range(max_retries):
+        try:
+            return psycopg2.connect(
+                host=host, port=int(port), dbname=database, user=user,
+                password=password, connect_timeout=600,
+            )
+        except psycopg2.OperationalError as e:
+            if attempt < max_retries - 1:
+                time.sleep(10)  # Wait 10 seconds before retry
+                continue
+            raise  # Re-raise on final attempt
 
 
 def list_databases(host, port, user, password):

@@ -333,12 +333,13 @@ def read_phone_set(path):
 
 def run_remove(a, out):
     name_format = need_placeholder(a["name_format"])
-    split_dir = out / "SPLITS"
-    split_dir.mkdir(parents=True, exist_ok=True)
+    print("=" * 60)
+    print("REMOVE PIPELINE - MULTI-FILE PROCESSING")
+    print("=" * 60)
 
-    print("--- Starting Multi-Stage Filtering ---")
+    print("Loading reference data...")
     exclude = set()
-    new_dnc_phones = set()  # Track new DNC phones found in input file
+    all_new_dnc_phones = set()  # Track new DNC phones found across all input files
 
     print(" -> Loading CRM...")
     try:
@@ -379,71 +380,134 @@ def run_remove(a, out):
         print(f"  -> ERROR loading DNC list: {type(e).__name__}: {e}")
         raise
 
-    print(" -> Loading input file and removing matches (in chunks)...")
-    header = table_header(a["order"])
-    phone_col = find_phone_column(header)
-    nodup_path = out / "combined_data_nodup.csv"
-    removed_path = out / "combined_data_removed_matches.csv"
-    kept_n = removed_n = 0
-    wrote_kept = wrote_removed = False
-    written = {}          # split file name -> rows written
-    state_missing = False
+    # Handle multiple order files
+    files = sorted(a["orders"], key=lambda p: p.name)
+    combine = bool(a.get("combine"))
+    print(f"\nFound {len(files)} files to process")
+    if combine:
+        print(" -> Combine mode ON: merging all order files into one list")
 
-    # Check if input file has a status column for DNC tracking
-    col_map = {str(c).strip().lower(): c for c in header.columns}
-    status_col = col_map.get("status", None)
-    if status_col:
-        print(f" -> Found status column: {status_col} - will track DNC records")
+        parts = []
+        for f in files:
+            try:
+                parts.append(read_file(f, dtype=str))
+            except Exception as e:
+                print(f" ERROR reading {f.name}: {type(e).__name__}: {e}")
+        if not parts:
+            raise ValueError("No readable order files to combine.")
+        combined_df = pd.concat(parts, ignore_index=True)
+        print(f" -> Combined {len(parts)} file(s): {len(combined_df):,} records")
+        jobs = [(None, combined_df, "COMBINED")]
+    else:
+        jobs = [(f, None, None) for f in files]
 
-    for chunk in iter_table(a["order"]):
-        clean = clean_phone_last10(chunk[phone_col])
-        is_match = clean.isin(exclude).reindex(chunk.index, fill_value=False)
-        removed, kept = chunk[is_match], chunk[~is_match]
-        removed_n += len(removed)
-        kept_n += len(kept)
-        removed.to_csv(removed_path, mode="a", header=not wrote_removed, index=False)
-        kept.to_csv(nodup_path, mode="a", header=not wrote_kept, index=False)
-        wrote_removed = wrote_kept = True
+    ok_n = fail_n = 0
+    totals = {"kept": 0, "removed": 0}
+    all_new_dnc_phones = set()
+    all_file_stats = []
 
-        # Track DNC records from input file if status column exists
-        if status_col:
-            dnc_records = chunk[chunk[status_col].astype(str).str.upper() == "DNC"]
-            if not dnc_records.empty:
-                dnc_clean = clean_phone_last10(dnc_records[phone_col])
-                new_dnc_phones.update(dnc_clean.tolist())
+    for f, preloaded, lname in jobs:
+        print(f"\n{'=' * 60}")
+        print(f"Processing: {os.path.basename(str(f)) if f else 'COMBINED'} -> Output as: {lname}")
+        print(f"{'=' * 60}")
 
-        part = kept.copy()
-        part.columns = part.columns.astype(str).str.strip().str.upper()
-        if "STATE" not in part.columns:
-            state_missing = True
-            continue
-        part["STATE"] = part["STATE"].fillna("UNKNOWN").astype(str).str.strip().str.upper()
-        for state, grp in part.groupby("STATE", sort=False):
-            clean_state = "".join(ch for ch in str(state) if ch.isalnum()) or "UNKNOWN"
-            file_name = name_format.format(clean_state)
-            grp.to_csv(split_dir / file_name, mode="a", header=file_name not in written, index=False)
-            written[file_name] = written.get(file_name, 0) + len(grp)
+        try:
+            if preloaded is not None:
+                df = preloaded.copy()
+            else:
+                df = read_file(f, dtype=str)
+            
+            header = df.columns
+            phone_col = find_phone_column(df)
+            list_dir = out / lname
+            split_dir = list_dir / "Split"
+            split_dir.mkdir(parents=True, exist_ok=True)
+            
+            nodup_path = list_dir / f"{lname}_nodup.csv"
+            removed_path = list_dir / f"{lname}_removed.csv"
+            kept_n = removed_n = 0
+            wrote_kept = wrote_removed = False
+            written = {}
+            state_missing = False
+            
+            # Check if input file has a status column for DNC tracking
+            col_map = {str(c).strip().lower(): c for c in header.columns}
+            status_col = col_map.get("status", None)
+            if status_col:
+                print(f" -> Found status column: {status_col} - will track DNC records")
+            
+            print(" -> Removing matches (in chunks)...")
+            for chunk in iter_table(f if f else (list_dir / "temp.xlsx"), chunk_rows=CHUNK_ROWS) if preloaded is None else [df]:
+                clean = clean_phone_last10(chunk[phone_col])
+                is_match = clean.isin(exclude).reindex(chunk.index, fill_value=False)
+                removed, kept = chunk[is_match], chunk[~is_match]
+                removed_n += len(removed)
+                kept_n += len(kept)
+                removed.to_csv(removed_path, mode="a", header=not wrote_removed, index=False)
+                kept.to_csv(nodup_path, mode="a", header=not wrote_kept, index=False)
+                wrote_removed = wrote_kept = True
 
-    if not wrote_kept:  # empty input
-        header.to_csv(nodup_path, index=False)
-        header.to_csv(removed_path, index=False)
+                # Track DNC records from input file if status column exists
+                if status_col:
+                    dnc_records = chunk[chunk[status_col].astype(str).str.upper() == "DNC"]
+                    if not dnc_records.empty:
+                        dnc_clean = clean_phone_last10(dnc_records[phone_col])
+                        all_new_dnc_phones.update(dnc_clean.tolist())
 
-    print(f"Records kept: {kept_n:,}")
-    print(f"Records removed: {removed_n:,}")
-    print("\n--- Data Splitting by STATE ---")
-    if state_missing:
-        print("STATE column not found. Skipping split.")
-    for file_name, n in written.items():
-        print(f"Saved {file_name} ({n:,} records)")
+                part = kept.copy()
+                part.columns = part.columns.astype(str).str.strip().str.upper()
+                if "STATE" not in part.columns:
+                    state_missing = True
+                    continue
+                part["STATE"] = part["STATE"].fillna("UNKNOWN").astype(str).str.strip().str.upper()
+                for state, grp in part.groupby("STATE", sort=False):
+                    clean_state = "".join(ch for ch in str(state) if ch.isalnum()) or "UNKNOWN"
+                    file_name = name_format.format(clean_state)
+                    grp.to_csv(split_dir / file_name, mode="a", header=file_name not in written, index=False)
+                    written[file_name] = written.get(file_name, 0) + len(grp)
 
-    # Update DNC file with new DNC phones found
-    if new_dnc_phones:
+            if not wrote_kept:  # empty input
+                header.to_csv(nodup_path, index=False)
+                header.to_csv(removed_path, index=False)
+
+            print(f"Records kept: {kept_n:,}")
+            print(f"Records removed: {removed_n:,}")
+            print("\n--- Data Splitting by STATE ---")
+            if state_missing:
+                print("STATE column not found. Skipping split.")
+            for file_name, n in written.items():
+                print(f"Saved {file_name} ({n:,} records)")
+
+            totals["kept"] += kept_n
+            totals["removed"] += removed_n
+            
+            all_file_stats.append({
+                "file": lname,
+                "kept": kept_n,
+                "removed": removed_n,
+                "total": kept_n + removed_n
+            })
+            
+            ok_n += 1
+        except Exception as e:
+            print(f"ERROR processing {os.path.basename(str(f)) if f else 'COMBINED'}: {type(e).__name__}: {e}")
+            fail_n += 1
+
+    print(f"\n{'=' * 60}\nPROCESSING COMPLETE")
+    print(f"Successful: {ok_n}\nFailed: {fail_n}")
+    print(f"Total records kept: {totals['kept']:,}")
+    print(f"Total records removed: {totals['removed']:,}")
+    print(f"Total new DNC phones found: {len(all_new_dnc_phones):,}")
+    
+    # Update DNC file with new DNC phones found across all files
+    if all_new_dnc_phones:
         print(f"\n--- Updating DNC File ---")
-        print(f"Found {len(new_dnc_phones)} DNC records in input file")
-        update_dnc_file(a["dnc"], new_dnc_phones, out / "DNC_updated.xlsx")
+        update_dnc_file(a["dnc"], all_new_dnc_phones, out / "DNC_updated.xlsx")
     else:
         print(f"\n--- DNC Update ---")
-        print("No new DNC records found in input file")
+        print("No new DNC phones found across all files")
+    
+    print(f"{'=' * 60}")
 
 
 # =====================================================================
@@ -1167,12 +1231,16 @@ CSV_XLSX = ".csv,.xlsx,.xls,.xlsm"
 TOOLS = {
     "remove": dict(
         title="Remove Pipeline",
-        desc="Takes the new order file, removes every number found in the CRM, Answer Machine and DNC lists, "
-             "then splits what is left by state.",
+        desc="Takes the new order files, removes every number found in the CRM, Answer Machine and DNC lists, "
+             "then splits what is left by state. Can process multiple files at once.",
         fn=run_remove,
         fields=[
-            dict(name="order", label="Order file", kind="file", accept=CSV_XLSX),
-            dict(name="crm", label="CRM file", kind="file", accept=CSV_XLSX),
+            dict(name="orders", label="Order files (select several)", kind="files", accept=CSV_XLSX),
+            dict(name="combine", label="Combine all orders into one output", kind="check",
+                 default=False,
+                 hint="Checked: every selected order file is merged and processed as a single list. "
+                      "Unchecked: each order file is processed separately."),
+            dict(name="crm", label="CRM file (.csv / .xlsx / .xls / .xlsm)", kind="file", accept=CSV_XLSX),
             dict(name="am_txt", label="Answer Machine Calls (.txt)", kind="file", accept=".txt,.csv"),
             dict(name="am_excel", label="Answer Machine Calls (Excel)", kind="file", accept=CSV_XLSX,
                  default=str(Path(__file__).parent / "filles" / "Answer Machine Calls.xlsx")),

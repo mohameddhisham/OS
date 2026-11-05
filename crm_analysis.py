@@ -642,3 +642,8 @@ def show_crm_analysis_page():
 
         with st.expander("View raw data (first 100 rows; contains personal data)"):
             st.dataframe(raw.head(100), width="stretch")
+
+
+
+
+            

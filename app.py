@@ -12,6 +12,7 @@ import streamlit as st
 from tools import TOOLS, run_tool, safe_name
 from db_page import show_database_page
 from crm_analysis import save_crm_data, show_crm_analysis_page
+from vendor_app import show_vendor_page
 
 st.set_page_config(page_title="Data Tools", layout="centered")
 
@@ -165,7 +166,7 @@ with st.sidebar:
         st.rerun()
     
     st.divider()
-    page = st.radio("Select Page", ["Data Tools", "CRM Analysis", "Database Viewer"])
+    page = st.radio("Select Page", ["Data Tools", "CRM Analysis", "Database Viewer", "Vendor Comparison"])
 
 if page == "Data Tools":
     st.title("Data Tools")
@@ -236,5 +237,7 @@ if page == "Data Tools":
             show_results(key)
 elif page == "CRM Analysis":
     show_crm_analysis_page()
+elif page == "Vendor Comparison":
+    show_vendor_page()
 else:
     show_database_page()

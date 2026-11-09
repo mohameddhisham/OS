@@ -399,7 +399,7 @@ def run_remove(a, out):
         print(f" -> Combined {len(parts)} file(s): {len(combined_df):,} records")
         jobs = [(None, combined_df, "COMBINED")]
     else:
-        jobs = [(f, None, None) for f in files]
+        jobs = [(f, None, safe_name(f.name)) for f in files]
 
     ok_n = fail_n = 0
     totals = {"kept": 0, "removed": 0}
@@ -437,7 +437,7 @@ def run_remove(a, out):
                 print(f" -> Found status column: {status_col} - will track DNC records")
             
             print(" -> Removing matches (in chunks)...")
-            for chunk in iter_table(f if f else (list_dir / "temp.xlsx"), chunk_rows=CHUNK_ROWS) if preloaded is None else [df]:
+            for chunk in iter_table(f, chunk_rows=CHUNK_ROWS) if preloaded is None else [df]:
                 clean = clean_phone_last10(chunk[phone_col])
                 is_match = clean.isin(exclude).reindex(chunk.index, fill_value=False)
                 removed, kept = chunk[is_match], chunk[~is_match]
@@ -851,7 +851,7 @@ def run_re(a, out):
         print(f" -> Combined {len(parts)} file(s): {len(combined_df):,} records")
         jobs = [(None, combined_df, "COMBINED")]
     else:
-        jobs = [(f, None, None) for f in files]
+        jobs = [(f, None, safe_name(f.name)) for f in files]
 
     ok_n = fail_n = 0
     totals = {"AA": 0, "AM": 0, "NEW": 0, "CALLBK": 0, "DNC": 0, "U": 0}
